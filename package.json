@@ -9,6 +9,7 @@
     "lint": "eslint"
   },
   "dependencies": {
+    "@google-cloud/vertexai": "^1.11.0",
     "@google/generative-ai": "^0.24.1",
     "@heygen/liveavatar-web-sdk": "^0.0.13",
     "next": "16.2.3",
