@@ -1,13 +1,15 @@
-import { GoogleGenerativeAI } from '@google/generative-ai';
-import { NextResponse } from 'next/server';
+import { GoogleGenerativeAI } from "@google/generative-ai";
+import { NextResponse } from "next/server";
+import { getSessionUser } from "@/lib/auth";
 
-// Initialize Gemini using the key from your .env.local file
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY as string);
 
 export async function POST(req: Request) {
-// DEBUGGING LINES:
-  console.log("My API Key is exactly this long:", process.env.GEMINI_API_KEY?.length);
-  console.log("Does it start with AIza?", process.env.GEMINI_API_KEY?.startsWith("AIza"));
+  const user = await getSessionUser();
+  if (!user) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
   try {
     const body = await req.json();
     // We expect the frontend to send the latest message and the past conversation
