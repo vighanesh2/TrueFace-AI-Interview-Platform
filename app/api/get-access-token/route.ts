@@ -15,26 +15,28 @@ export async function POST() {
         'Content-Type': 'application/json'
       },
       body: JSON.stringify({
-        mode: "LITE",
-        avatar_id: "dd73ea75-1218-4ef3-92ce-606d5f7fbc0a"
+        mode: "FULL",
+        avatar_id: "dd73ea75-1218-4ef3-92ce-606d5f7fbc0a",
+        // 🚨 THE REAL FIX: No wrapper. An object directly at the root.
+        avatar_persona: {
+          prompt: "You are a Senior Engineering Manager conducting a technical mock interview."
+        }
       }) 
     });
 
     const data = await res.json();
 
-    // 🚨 DEBUGGING: You can actually delete these console logs now if you want, 
-    // but leaving them is harmless.
-    console.log("\n=== LIVEAVATAR RAW RESPONSE ===");
-    console.log(data);
-    console.log("===============================\n");
-
-    // THE FIX: Check for code 1000 and data.session_token
     if (data.code !== 1000 || !data.data?.session_token) {
+       console.error("\n❌ HEYGEN TOKEN REJECTION DETAILS ❌");
+       console.error(data);
+       console.error("=====================================\n");
        return NextResponse.json({ error: "LiveAvatar rejected the request", details: data }, { status: 400 });
     }
 
-    // THE FIX: Return the correct token path
-    return NextResponse.json({ token: data.data.session_token });
+    return NextResponse.json({ 
+        token: data.data.session_token,
+        sessionId: data.data.session_id 
+    });
     
   } catch (error) {
     console.error('Error fetching LiveAvatar token:', error);

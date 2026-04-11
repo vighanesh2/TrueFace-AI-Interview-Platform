@@ -5,9 +5,10 @@ import { NextResponse } from 'next/server';
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY as string);
 
 export async function POST(req: Request) {
-// DEBUGGING LINES:
+  // DEBUGGING LINES:
   console.log("My API Key is exactly this long:", process.env.GEMINI_API_KEY?.length);
   console.log("Does it start with AIza?", process.env.GEMINI_API_KEY?.startsWith("AIza"));
+  
   try {
     const body = await req.json();
     // We expect the frontend to send the latest message and the past conversation

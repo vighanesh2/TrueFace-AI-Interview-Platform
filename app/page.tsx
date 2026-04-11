@@ -12,42 +12,63 @@ export default function Home() {
   
   const avatarRef = useRef<any>(null);
 
+  // Cleanly close the session to prevent Ghost Sessions
+  const stopAvatarSession = async () => {
+    if (avatarRef.current) {
+      try {
+        console.log("Stopping avatar session...");
+        await avatarRef.current.stop();
+      } catch (e) {
+        console.error("Error stopping avatar cleanly:", e);
+      }
+      avatarRef.current = null;
+    }
+    setSessionActive(false);
+    setIsAvatarStarting(false);
+    setIsChatting(false);
+  };
+
   // 1. Start the Avatar Session
   const startAvatarSession = async () => {
+    if (isAvatarStarting || sessionActive) return;
+    
     setIsAvatarStarting(true);
+
     try {
       const tokenRes = await fetch("/api/get-access-token", { method: "POST" });
       const tokenData = await tokenRes.json();
       
-      if (!tokenData.token) throw new Error("Failed to get token");
+      if (!tokenRes.ok || !tokenData.token) {
+        console.error("🚨 SERVER REJECTED TOKEN REQUEST:", tokenData);
+        alert(`Server Error: ${tokenData.details?.message || "Check VS Code terminal for the exact reason"}`);
+        throw new Error("Token generation failed before session could start.");
+      }
 
       const avatar = new LiveAvatarSession(tokenData.token);
       avatarRef.current = avatar;
 
-    // 3. THE MAGIC ATTACHER (2026 SDK Method)
-    avatar.on(SessionEvent.SESSION_STREAM_READY, () => {
-      console.log("🎥 Stream event triggered!");
-      
-      // Grab the raw HTML video element
-      const videoElement = document.getElementById("avatar-video") as HTMLVideoElement;
-      
-      if (videoElement) {
-        console.log("✅ Binding SDK directly to video element!");
+      avatar.on(SessionEvent.SESSION_STREAM_READY, () => {
+        console.log("🎥 Stream event triggered!");
+        const videoElement = document.getElementById("avatar-video") as HTMLVideoElement;
         
-        // THE FIX: Let the SDK handle the stream automatically!
-        avatar.attach(videoElement);
-        
-        setSessionActive(true);
-      } else {
-        console.error("❌ Could not find the video player on the screen.");
-      }
-    });
+        if (videoElement) {
+          avatar.attach(videoElement);
+          setSessionActive(true);
+        } else {
+          console.error("❌ Could not find the video player on the screen.");
+        }
+      });
+
+      avatar.on(SessionEvent.SESSION_DISCONNECTED, () => {
+        console.log("Session disconnected from server.");
+        stopAvatarSession();
+      });
 
       await avatar.start();
 
     } catch (error) {
       console.error("Failed to start avatar:", error);
-      alert("Failed to start avatar. Check your browser console for exact details.");
+      await stopAvatarSession();
     } finally {
       setIsAvatarStarting(false);
     }
@@ -59,29 +80,60 @@ export default function Home() {
 
     const userText = input;
     setInput("");
-    setMessages((prev) => [...prev, { role: "user", text: userText }]);
+    
+    const currentMessages = [...messages, { role: "user", text: userText }];
+    setMessages(currentMessages);
     setIsChatting(true);
 
     try {
+      // 🚨 THE FIX 1: Only send PAST messages in the history array. 
+      // Do not include the 'currentMessages' array here, otherwise Gemini gets duplicate inputs!
+      const formattedHistory = messages.map((msg) => ({
+        role: msg.role === "user" ? "user" : "model",
+        parts: [{ text: msg.text }],
+      }));
+
+      // Get response from Gemini
       const chatRes = await fetch("/api/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message: userText }),
+        body: JSON.stringify({ 
+          message: userText,
+          history: formattedHistory
+        }),
       });
+      
       const chatData = await chatRes.json();
+      
+      // 🚨 THE FIX 2: Stop the "Undefined" Poison! 
+      // If Gemini fails, throw an error immediately so we don't save a blank message.
+      if (!chatRes.ok || !chatData.response) {
+         throw new Error(chatData.error || "Gemini API failed to respond");
+      }
+
       const aiResponse = chatData.response;
 
+      // Only save to UI if we actually got a real response
       setMessages((prev) => [...prev, { role: "ai", text: aiResponse }]);
 
+      // THE REAL SDK METHOD
       if (avatarRef.current) {
-        if (typeof avatarRef.current.speak === 'function') {
-           await avatarRef.current.speak({ text: aiResponse });
-        } else if (typeof avatarRef.current.sendText === 'function') {
-           await avatarRef.current.sendText(aiResponse);
+        try {
+           console.log("Sending text to avatar:", aiResponse);
+           await avatarRef.current.repeat(aiResponse);
+        } catch (sdkError) {
+           console.error("Failed to make avatar repeat:", sdkError);
         }
+      } else {
+         console.error("Critical SDK Error: Avatar reference is missing.");
       }
+      
     } catch (error) {
       console.error("Chat error:", error);
+      // 🚨 THE FIX 3: Revert the UI state! 
+      // Remove the user's message from the screen so they can try again without breaking the history loop.
+      setMessages(messages); 
+      alert("The Brain (Gemini) is temporarily overloaded. Please wait 5 seconds and try sending your message again.");
     } finally {
       setIsChatting(false);
     }
@@ -89,8 +141,8 @@ export default function Home() {
 
   useEffect(() => {
     return () => {
-      if (avatarRef.current && typeof avatarRef.current.stop === 'function') {
-        avatarRef.current.stop();
+      if (avatarRef.current) {
+        avatarRef.current.stop().catch(console.error);
       }
     };
   }, []);
@@ -102,7 +154,6 @@ export default function Home() {
       {/* Video Player Container */}
       <div className="w-full max-w-3xl aspect-video bg-gray-900 border border-gray-800 rounded-xl overflow-hidden mb-6 relative flex items-center justify-center">
         
-        {/* Added raw HTML ID here! */}
         <video 
           id="avatar-video"
           autoPlay 
@@ -112,7 +163,6 @@ export default function Home() {
           <track kind="captions" />
         </video>
 
-        {/* Start Button Overlay */}
         {!sessionActive && (
           <div className="absolute z-10 flex flex-col items-center gap-4">
             <p className="text-gray-400">Video feed offline.</p>
@@ -124,6 +174,15 @@ export default function Home() {
               {isAvatarStarting ? "Booting up Avatar..." : "Start Interview"}
             </button>
           </div>
+        )}
+
+        {sessionActive && (
+          <button 
+            onClick={stopAvatarSession}
+            className="absolute top-4 right-4 bg-red-600/80 hover:bg-red-500 text-white text-sm font-bold py-2 px-4 rounded-lg backdrop-blur-sm transition-colors"
+          >
+            End Interview
+          </button>
         )}
       </div>
 
