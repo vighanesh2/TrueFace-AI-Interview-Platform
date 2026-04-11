@@ -16,6 +16,10 @@ Rules:
 4. Never break character. You are the interviewer.`;
 
 export async function POST(req: Request) {
+  // DEBUGGING LINES:
+  console.log("My API Key is exactly this long:", process.env.GEMINI_API_KEY?.length);
+  console.log("Does it start with AIza?", process.env.GEMINI_API_KEY?.startsWith("AIza"));
+  
   const gcpKeyPath = resolveGcpServiceAccountKeyPath();
 
   try {
