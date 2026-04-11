@@ -10,7 +10,60 @@ export default function Home() {
   const [isChatting, setIsChatting] = useState(false);
   const [sessionActive, setSessionActive] = useState(false);
   
+  // 🚨 NEW: Speech-to-Text State
+  const [isListening, setIsListening] = useState(false);
+  const recognitionRef = useRef<any>(null);
+  
   const avatarRef = useRef<any>(null);
+
+  // 🚨 NEW: Initialize Browser Native Speech Recognition
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      // Support both standard and WebKit browsers (Chrome/Safari)
+      const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+      
+      if (SpeechRecognition) {
+        const recognition = new SpeechRecognition();
+        recognition.continuous = true; // Keep listening until they stop
+        recognition.interimResults = true; // Show words as they speak
+        recognition.lang = "en-US";
+
+        recognition.onresult = (event: any) => {
+          let currentTranscript = "";
+          for (let i = event.resultIndex; i < event.results.length; ++i) {
+            currentTranscript += event.results[i][0].transcript;
+          }
+          // Update the text box with what they are saying
+          setInput(currentTranscript);
+        };
+
+        recognition.onerror = (event: any) => {
+          console.error("Speech recognition error", event.error);
+          setIsListening(false);
+        };
+
+        recognition.onend = () => {
+          setIsListening(false);
+        };
+
+        recognitionRef.current = recognition;
+      } else {
+        console.warn("Speech Recognition is not supported in this browser. Use Chrome.");
+      }
+    }
+  }, []);
+
+  // 🚨 NEW: Toggle Microphone
+  const toggleListening = () => {
+    if (isListening) {
+      recognitionRef.current?.stop();
+      setIsListening(false);
+    } else {
+      setInput(""); // Clear the box before they start talking
+      recognitionRef.current?.start();
+      setIsListening(true);
+    }
+  };
 
   // Cleanly close the session to prevent Ghost Sessions
   const stopAvatarSession = async () => {
@@ -26,6 +79,11 @@ export default function Home() {
     setSessionActive(false);
     setIsAvatarStarting(false);
     setIsChatting(false);
+    
+    if (isListening) {
+      recognitionRef.current?.stop();
+      setIsListening(false);
+    }
   };
 
   // 1. Start the Avatar Session
@@ -78,6 +136,12 @@ export default function Home() {
   const sendMessage = async () => {
     if (!input.trim() || isChatting) return;
 
+    // Stop listening automatically when they hit send
+    if (isListening) {
+      recognitionRef.current?.stop();
+      setIsListening(false);
+    }
+
     const userText = input;
     setInput("");
     
@@ -86,14 +150,11 @@ export default function Home() {
     setIsChatting(true);
 
     try {
-      // 🚨 THE FIX 1: Only send PAST messages in the history array. 
-      // Do not include the 'currentMessages' array here, otherwise Gemini gets duplicate inputs!
-      const formattedHistory = messages.map((msg) => ({
+      const formattedHistory = currentMessages.map((msg) => ({
         role: msg.role === "user" ? "user" : "model",
         parts: [{ text: msg.text }],
       }));
 
-      // Get response from Gemini
       const chatRes = await fetch("/api/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -105,21 +166,17 @@ export default function Home() {
       
       const chatData = await chatRes.json();
       
-      // 🚨 THE FIX 2: Stop the "Undefined" Poison! 
-      // If Gemini fails, throw an error immediately so we don't save a blank message.
       if (!chatRes.ok || !chatData.response) {
          throw new Error(chatData.error || "Gemini API failed to respond");
       }
 
       const aiResponse = chatData.response;
 
-      // Only save to UI if we actually got a real response
       setMessages((prev) => [...prev, { role: "ai", text: aiResponse }]);
 
-      // THE REAL SDK METHOD
       if (avatarRef.current) {
         try {
-           console.log("Sending text to avatar:", aiResponse);
+           console.log("Sending text to avatar...");
            await avatarRef.current.repeat(aiResponse);
         } catch (sdkError) {
            console.error("Failed to make avatar repeat:", sdkError);
@@ -130,8 +187,6 @@ export default function Home() {
       
     } catch (error) {
       console.error("Chat error:", error);
-      // 🚨 THE FIX 3: Revert the UI state! 
-      // Remove the user's message from the screen so they can try again without breaking the history loop.
       setMessages(messages); 
       alert("The Brain (Gemini) is temporarily overloaded. Please wait 5 seconds and try sending your message again.");
     } finally {
@@ -199,15 +254,28 @@ export default function Home() {
         </div>
 
         <div className="flex gap-2">
+          {/* 🚨 NEW: Microphone Button */}
+          <button
+            onClick={toggleListening}
+            disabled={!sessionActive || isChatting}
+            className={`flex items-center justify-center px-4 rounded-lg transition-colors disabled:opacity-50 ${
+              isListening ? "bg-red-600 hover:bg-red-500 animate-pulse" : "bg-gray-700 hover:bg-gray-600"
+            }`}
+            title={isListening ? "Stop Listening" : "Start Microphone"}
+          >
+            {isListening ? "🛑" : "🎙️"}
+          </button>
+
           <input
             type="text"
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && sendMessage()}
-            placeholder="Type your answer here..."
+            placeholder="Type or speak your answer here..."
             className="flex-1 bg-gray-800 border border-gray-700 rounded-lg p-4 text-white focus:outline-none focus:border-cyan-500"
             disabled={!sessionActive || isChatting}
           />
+          
           <button 
             onClick={sendMessage}
             disabled={!sessionActive || isChatting}
