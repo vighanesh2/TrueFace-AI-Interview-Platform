@@ -26,6 +26,13 @@ export function NewInterviewLauncher({ className, label = "+ New interview" }: P
   const [creating, setCreating] = useState(false);
 
   const startInterview = async () => {
+    if (interviewType === "technical") {
+      setDialogOpen(false);
+      router.push("/dashboard/interview");
+      router.refresh();
+      return;
+    }
+
     setCreating(true);
     try {
       const res = await fetch("/api/recordings", {

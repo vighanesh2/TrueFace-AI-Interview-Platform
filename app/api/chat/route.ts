@@ -1,33 +1,14 @@
-import { GoogleGenerativeAI } from "@google/generative-ai";
 import type { Content } from "@google-cloud/vertexai";
+import { GoogleGenerativeAI } from "@google/generative-ai";
+import { ObjectId } from "mongodb";
 import { NextResponse } from "next/server";
 import {
   generateWithVertexGemini,
   resolveGcpServiceAccountKeyPath,
 } from "@/lib/gcp-vertex-gemini";
+import { getSessionUser } from "@/lib/auth";
+import { bumpRecordingMessageCount } from "@/lib/recordings";
 import { resolveGeminiApiKey } from "@/lib/resolve-gemini-api-key";
-
-const SYSTEM_INSTRUCTION = `You are a Senior Engineering Manager at a top tech company conducting a live interview. 
-The user is a college student applying for an internship. 
-Rules:
-1. Ask exactly ONE question at a time. Do not overwhelm the candidate.
-2. Keep your responses short (under 3 sentences) so the text-to-speech avatar sounds natural.
-3. If the candidate struggles, offer a minor hint. 
-4. Never break character. You are the interviewer.`;
-
-type Turn = { role: string; text: string };
-
-function toGeminiHistory(turns: Turn[] | undefined, latestUserText: string) {
-  let list = [...(turns ?? [])];
-  const last = list[list.length - 1];
-  if (last?.role === "user" && last.text === latestUserText) {
-    list = list.slice(0, -1);
-  }
-  return list.map((m) => ({
-    role: m.role === "user" ? ("user" as const) : ("model" as const),
-    parts: [{ text: m.text }],
-  }));
-}
 
 const technicalInstruction = `You are a Senior Engineering Manager at a top tech company conducting a live TECHNICAL interview.
 The candidate is applying for an internship or early-career role.
@@ -47,19 +28,47 @@ Rules:
 4. If an answer is vague, ask one clarifying follow-up before moving on.
 5. Never break character. You are the interviewer.`;
 
+function normalizeGeminiHistory(raw: unknown): Content[] {
+  if (!Array.isArray(raw)) return [];
+  return raw.map((item: unknown) => {
+    if (item && typeof item === "object" && "parts" in item && "role" in item) {
+      return item as Content;
+    }
+    if (item && typeof item === "object" && "role" in item && "text" in item) {
+      const o = item as { role: string; text: string };
+      return {
+        role: o.role === "user" ? "user" : "model",
+        parts: [{ text: o.text }],
+      };
+    }
+    return { role: "user", parts: [{ text: "" }] };
+  });
+}
+
 export async function POST(req: Request) {
-  // DEBUGGING LINES:
-  console.log("My API Key is exactly this long:", process.env.GEMINI_API_KEY?.length);
-  console.log("Does it start with AIza?", process.env.GEMINI_API_KEY?.startsWith("AIza"));
-  
   const gcpKeyPath = resolveGcpServiceAccountKeyPath();
 
   try {
     const body = await req.json();
-    const { message, history } = body as {
+    const {
+      message,
+      history: rawHistory,
+      recordingId,
+      interviewType,
+    } = body as {
       message: string;
-      history?: Content[];
+      history?: unknown;
+      recordingId?: string;
+      interviewType?: string;
     };
+
+    if (typeof message !== "string" || !message.trim()) {
+      return NextResponse.json({ error: "Message required" }, { status: 400 });
+    }
+
+    const history = normalizeGeminiHistory(rawHistory);
+    const systemInstruction =
+      interviewType === "behavioral" ? behavioralInstruction : technicalInstruction;
 
     let responseText: string;
 
@@ -68,7 +77,7 @@ export async function POST(req: Request) {
         gcpKeyPath,
         message,
         history,
-        SYSTEM_INSTRUCTION
+        systemInstruction
       );
     } else {
       const apiKey = resolveGeminiApiKey();
@@ -85,17 +94,20 @@ export async function POST(req: Request) {
       const genAI = new GoogleGenerativeAI(apiKey);
       const model = genAI.getGenerativeModel({
         model: "gemini-2.5-flash",
-        systemInstruction: SYSTEM_INSTRUCTION,
+        systemInstruction,
       });
       const chat = model.startChat({
-        history: history || [],
+        history,
       });
       const result = await chat.sendMessage(message);
       responseText = result.response.text();
     }
 
     if (recordingId && typeof recordingId === "string") {
-      await bumpRecordingMessageCount(recordingId, new ObjectId(user.id), 2);
+      const user = await getSessionUser();
+      if (user) {
+        await bumpRecordingMessageCount(recordingId, new ObjectId(user.id), 2);
+      }
     }
 
     return NextResponse.json({ response: responseText });

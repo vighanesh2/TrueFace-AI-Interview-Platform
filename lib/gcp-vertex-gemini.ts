@@ -11,7 +11,12 @@ export function resolveGcpServiceAccountKeyPath(): string | null {
     process.env.GOOGLE_APPLICATION_CREDENTIALS?.trim() ||
     process.env.GCP_SERVICE_ACCOUNT_PATH?.trim();
   if (raw) {
-    return path.isAbsolute(raw) ? raw : path.join(process.cwd(), raw);
+    const absolute = path.isAbsolute(raw) ? raw : path.join(process.cwd(), raw);
+    if (existsSync(absolute)) return absolute;
+    console.warn(
+      `[gcp] Service account JSON not found at ${absolute}. Remove or fix GOOGLE_APPLICATION_CREDENTIALS / GCP_SERVICE_ACCOUNT_PATH, or add the file. Using GEMINI_API_KEY if available.`
+    );
+    return null;
   }
   const fallback = path.join(process.cwd(), DEFAULT_SERVICE_ACCOUNT_FILE);
   if (existsSync(fallback)) return fallback;

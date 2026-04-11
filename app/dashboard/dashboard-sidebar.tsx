@@ -1,8 +1,9 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname, useRouter } from "next/navigation";
+import { usePathname } from "next/navigation";
 import clsx from "clsx";
+import { SignOutButton } from "@/components/sign-out-button";
 import { ThemeMenu } from "@/components/theme-menu";
 
 type Props = { userEmail: string };
@@ -33,6 +34,20 @@ function IconRecordings({ className }: { className?: string }) {
   );
 }
 
+function IconLiveInterview({ className }: { className?: string }) {
+  return (
+    <svg className={className} width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden>
+      <path
+        d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z"
+        stroke="currentColor"
+        strokeWidth="1.75"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
 function IconSettings({ className }: { className?: string }) {
   return (
     <svg className={className} width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden>
@@ -54,6 +69,7 @@ function IconSettings({ className }: { className?: string }) {
 
 const nav = [
   { href: "/dashboard", label: "Home", Icon: IconHome, end: true },
+  { href: "/dashboard/interview", label: "Live technical", Icon: IconLiveInterview, end: true },
   { href: "/dashboard/recordings", label: "Recordings", Icon: IconRecordings, end: false },
   { href: "/dashboard/settings", label: "Settings", Icon: IconSettings, end: false },
 ] as const;
@@ -65,14 +81,7 @@ function displayName(email: string) {
 
 export function DashboardSidebar({ userEmail }: Props) {
   const pathname = usePathname();
-  const router = useRouter();
   const initial = (userEmail[0] ?? "?").toUpperCase();
-
-  const logout = async () => {
-    await fetch("/api/auth/logout", { method: "POST" });
-    router.push("/login");
-    router.refresh();
-  };
 
   return (
     <aside className="flex h-screen w-64 shrink-0 flex-col border-r border-neutral-200/90 bg-[#f5f5f5] px-4 py-8 font-sans dark:border-neutral-800 dark:bg-neutral-950">
@@ -124,13 +133,7 @@ export function DashboardSidebar({ userEmail }: Props) {
 
       <div className="mt-auto space-y-1 border-t border-neutral-200/80 pt-6 dark:border-neutral-800">
         <ThemeMenu />
-        <button
-          type="button"
-          onClick={() => void logout()}
-          className="w-full rounded-xl px-3 py-2.5 text-left text-sm font-medium text-neutral-600 transition-colors hover:bg-white/80 hover:text-neutral-900 dark:text-neutral-400 dark:hover:bg-neutral-800/80 dark:hover:text-neutral-100"
-        >
-          Sign out
-        </button>
+        <SignOutButton className="w-full rounded-xl px-3 py-2.5 text-left text-sm font-medium text-neutral-600 transition-colors hover:bg-white/80 hover:text-neutral-900 dark:text-neutral-400 dark:hover:bg-neutral-800/80 dark:hover:text-neutral-100" />
       </div>
     </aside>
   );

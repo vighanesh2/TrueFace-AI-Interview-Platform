@@ -5,6 +5,7 @@ import clsx from "clsx";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
+import { SignOutButton } from "@/components/sign-out-button";
 import { inputClass, labelClass, legendTitle, primaryButtonClass, subtleButtonClass } from "@/lib/fieldset-theme";
 import type { InterviewType } from "@/lib/recordings";
 
@@ -32,12 +33,6 @@ export default function InterviewChat({ userEmail, recordingId, interviewType, r
   const [input, setInput] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [ending, setEnding] = useState(false);
-
-  const logout = async () => {
-    await fetch("/api/auth/logout", { method: "POST" });
-    router.push("/login");
-    router.refresh();
-  };
 
   const endSession = async () => {
     setEnding(true);
@@ -112,9 +107,7 @@ export default function InterviewChat({ userEmail, recordingId, interviewType, r
           <Button type="button" onClick={() => void endSession()} disabled={ending} className={subtleButtonClass}>
             {ending ? "Saving…" : "End session"}
           </Button>
-          <Button type="button" onClick={logout} className={subtleButtonClass}>
-            Sign out
-          </Button>
+          <SignOutButton className={subtleButtonClass} />
         </div>
       </div>
 
