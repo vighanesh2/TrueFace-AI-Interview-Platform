@@ -13,7 +13,6 @@ export async function POST(req: Request) {
     // We expect the frontend to send the latest message and the past conversation
     const { message, history } = body; 
 
-    // We use gemini-1.5-flash because it is incredibly fast, which is crucial for real-time avatars
     const model = genAI.getGenerativeModel({
         model: "gemini-2.5-flash",
         systemInstruction: `You are a Senior Engineering Manager at a top tech company conducting a live interview. 

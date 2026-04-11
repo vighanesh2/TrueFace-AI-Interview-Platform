@@ -1,80 +1,162 @@
-"use client"; // Required because we are using React state
+"use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { LiveAvatarSession, SessionEvent } from "@heygen/liveavatar-web-sdk";
 
 export default function Home() {
-  const [messages, setMessages] = useState<{ role: string; text: string }[]>([]);
   const [input, setInput] = useState("");
-  const [isLoading, setIsLoading] = useState(false);
+  const [messages, setMessages] = useState<{ role: string; text: string }[]>([]);
+  const [isAvatarStarting, setIsAvatarStarting] = useState(false);
+  const [isChatting, setIsChatting] = useState(false);
+  const [sessionActive, setSessionActive] = useState(false);
+  
+  const avatarRef = useRef<any>(null);
 
-  const sendMessage = async () => {
-    if (!input.trim()) return;
-
-    // Add user message to UI immediately
-    const newMessages = [...messages, { role: "user", text: input }];
-    setMessages(newMessages);
-    setInput("");
-    setIsLoading(true);
-
+  // 1. Start the Avatar Session
+  const startAvatarSession = async () => {
+    setIsAvatarStarting(true);
     try {
-      // Send to your backend
-      const res = await fetch("/api/chat", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message: input, history: newMessages }),
-      });
+      const tokenRes = await fetch("/api/get-access-token", { method: "POST" });
+      const tokenData = await tokenRes.json();
+      
+      if (!tokenData.token) throw new Error("Failed to get token");
 
-      const data = await res.json();
+      const avatar = new LiveAvatarSession(tokenData.token);
+      avatarRef.current = avatar;
 
-      // Add AI response to UI
-      setMessages((prev) => [...prev, { role: "ai", text: data.response }]);
+    // 3. THE MAGIC ATTACHER (2026 SDK Method)
+    avatar.on(SessionEvent.SESSION_STREAM_READY, () => {
+      console.log("🎥 Stream event triggered!");
+      
+      // Grab the raw HTML video element
+      const videoElement = document.getElementById("avatar-video") as HTMLVideoElement;
+      
+      if (videoElement) {
+        console.log("✅ Binding SDK directly to video element!");
+        
+        // THE FIX: Let the SDK handle the stream automatically!
+        avatar.attach(videoElement);
+        
+        setSessionActive(true);
+      } else {
+        console.error("❌ Could not find the video player on the screen.");
+      }
+    });
+
+      await avatar.start();
+
     } catch (error) {
-      console.error("Chat Error:", error);
+      console.error("Failed to start avatar:", error);
+      alert("Failed to start avatar. Check your browser console for exact details.");
     } finally {
-      setIsLoading(false);
+      setIsAvatarStarting(false);
     }
   };
 
-  return (
-    <main className="flex min-h-screen flex-col items-center p-8 bg-gray-950 text-white font-sans">
-      <h1 className="text-4xl font-bold mb-2 text-cyan-400">Mock Live</h1>
-      <p className="text-gray-400 mb-8">Your AI Interviewer is ready.</p>
+  // 2. Handle Sending Messages
+  const sendMessage = async () => {
+    if (!input.trim() || isChatting) return;
 
-      {/* Chat Window */}
-      <div className="w-full max-w-2xl bg-gray-900 border border-gray-800 rounded-xl p-6 h-[500px] overflow-y-auto mb-4 flex flex-col gap-4">
-        {messages.length === 0 && (
-          <div className="text-gray-500 text-center mt-20">Type below to start your interview...</div>
-        )}
+    const userText = input;
+    setInput("");
+    setMessages((prev) => [...prev, { role: "user", text: userText }]);
+    setIsChatting(true);
+
+    try {
+      const chatRes = await fetch("/api/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ message: userText }),
+      });
+      const chatData = await chatRes.json();
+      const aiResponse = chatData.response;
+
+      setMessages((prev) => [...prev, { role: "ai", text: aiResponse }]);
+
+      if (avatarRef.current) {
+        if (typeof avatarRef.current.speak === 'function') {
+           await avatarRef.current.speak({ text: aiResponse });
+        } else if (typeof avatarRef.current.sendText === 'function') {
+           await avatarRef.current.sendText(aiResponse);
+        }
+      }
+    } catch (error) {
+      console.error("Chat error:", error);
+    } finally {
+      setIsChatting(false);
+    }
+  };
+
+  useEffect(() => {
+    return () => {
+      if (avatarRef.current && typeof avatarRef.current.stop === 'function') {
+        avatarRef.current.stop();
+      }
+    };
+  }, []);
+
+  return (
+    <main className="flex min-h-screen flex-col items-center justify-center p-8 bg-gray-950 text-white font-sans">
+      <h1 className="text-4xl font-bold mb-6 text-cyan-400">Mock Live Interview</h1>
+
+      {/* Video Player Container */}
+      <div className="w-full max-w-3xl aspect-video bg-gray-900 border border-gray-800 rounded-xl overflow-hidden mb-6 relative flex items-center justify-center">
         
-        {messages.map((msg, idx) => (
-          <div key={idx} className={`p-4 rounded-lg max-w-[80%] ${msg.role === "user" ? "bg-cyan-900 self-end" : "bg-gray-800 self-start"}`}>
-            <span className="font-bold text-sm text-gray-400 block mb-1">
-              {msg.role === "user" ? "You" : "Interviewer"}
-            </span>
-            {msg.text}
+        {/* Added raw HTML ID here! */}
+        <video 
+          id="avatar-video"
+          autoPlay 
+          playsInline 
+          className={`w-full h-full object-cover ${sessionActive ? 'block' : 'hidden'}`}
+        >
+          <track kind="captions" />
+        </video>
+
+        {/* Start Button Overlay */}
+        {!sessionActive && (
+          <div className="absolute z-10 flex flex-col items-center gap-4">
+            <p className="text-gray-400">Video feed offline.</p>
+            <button 
+              onClick={startAvatarSession}
+              disabled={isAvatarStarting}
+              className="bg-cyan-600 hover:bg-cyan-500 text-white font-bold py-3 px-6 rounded-lg transition-colors disabled:opacity-50"
+            >
+              {isAvatarStarting ? "Booting up Avatar..." : "Start Interview"}
+            </button>
           </div>
-        ))}
-        {isLoading && <div className="text-gray-500 self-start animate-pulse">Interviewer is typing...</div>}
+        )}
       </div>
 
-      {/* Input Box */}
-      <div className="w-full max-w-2xl flex gap-2">
-        <input
-          type="text"
-          value={input}
-          onChange={(e) => setInput(e.target.value)}
-          onKeyDown={(e) => e.key === "Enter" && sendMessage()}
-          placeholder="Type your response..."
-          className="flex-1 bg-gray-800 border border-gray-700 rounded-lg p-4 text-white focus:outline-none focus:border-cyan-500"
-          disabled={isLoading}
-        />
-        <button 
-          onClick={sendMessage}
-          disabled={isLoading}
-          className="bg-cyan-600 hover:bg-cyan-500 text-white font-bold py-4 px-8 rounded-lg transition-colors disabled:opacity-50"
-        >
-          Send
-        </button>
+      {/* Chat Interface */}
+      <div className="w-full max-w-3xl flex flex-col gap-4">
+        <div className="h-40 overflow-y-auto bg-gray-900 border border-gray-800 rounded-lg p-4 flex flex-col gap-2">
+          {messages.map((msg, idx) => (
+            <div key={idx} className={`p-2 rounded max-w-[85%] ${msg.role === "user" ? "bg-cyan-900 self-end" : "bg-gray-800 self-start"}`}>
+              <span className="font-bold text-xs text-gray-400 block">{msg.role === "user" ? "You" : "Interviewer"}</span>
+              <span className="text-sm">{msg.text}</span>
+            </div>
+          ))}
+          {messages.length === 0 && <p className="text-gray-600 text-sm italic text-center mt-4">Conversation history will appear here...</p>}
+        </div>
+
+        <div className="flex gap-2">
+          <input
+            type="text"
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && sendMessage()}
+            placeholder="Type your answer here..."
+            className="flex-1 bg-gray-800 border border-gray-700 rounded-lg p-4 text-white focus:outline-none focus:border-cyan-500"
+            disabled={!sessionActive || isChatting}
+          />
+          <button 
+            onClick={sendMessage}
+            disabled={!sessionActive || isChatting}
+            className="bg-cyan-600 hover:bg-cyan-500 text-white font-bold py-4 px-8 rounded-lg transition-colors disabled:opacity-50"
+          >
+            {isChatting ? "Thinking..." : "Send"}
+          </button>
+        </div>
       </div>
     </main>
   );
