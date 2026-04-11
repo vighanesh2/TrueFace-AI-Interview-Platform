@@ -46,7 +46,7 @@ export default function Home() {
           
           setInput(currentTranscript);
 
-          // 🚨 THE FIX: Catch fillers in the raw interim text before Chrome sanitizes it!
+          // Catch fillers in the raw interim text before Chrome sanitizes it!
           const fillers = currentTranscript.match(/\b(um|uh|uhm|like|Ah|basically|literally)\b/gi);
           const currentFillerAmount = fillers ? fillers.length : 0;
 
