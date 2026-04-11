@@ -5,14 +5,15 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 import clsx from "clsx";
+import { AuthShell } from "@/components/auth-shell";
 import {
-  descriptionClass,
-  fieldsetPanel,
-  inputClass,
-  labelClass,
-  legendTitle,
-  primaryButtonClass,
-} from "@/lib/fieldset-theme";
+  lightDescription,
+  lightFieldsetPanel,
+  lightInput,
+  lightLabel,
+  lightLegend,
+  lightPrimaryButton,
+} from "@/lib/dashboard-light-theme";
 
 export default function LoginPage() {
   const router = useRouter();
@@ -36,7 +37,7 @@ export default function LoginPage() {
         setError(typeof data.error === "string" ? data.error : "Login failed");
         return;
       }
-      router.push("/");
+      router.push("/dashboard");
       router.refresh();
     } catch {
       setError("Something went wrong");
@@ -46,23 +47,23 @@ export default function LoginPage() {
   };
 
   return (
-    <main className="min-h-screen flex flex-col items-center justify-center p-6 sm:p-8 bg-gray-950 text-white font-sans">
-      <div className="w-full max-w-lg px-4">
+    <AuthShell>
+      <div className="w-full max-w-lg">
         <form onSubmit={onSubmit}>
-          <Fieldset disabled={loading} className={fieldsetPanel}>
-            <Legend className={legendTitle}>Sign in</Legend>
-            <p className={descriptionClass}>
+          <Fieldset disabled={loading} className={clsx(lightFieldsetPanel, "sm:p-10")}>
+            <Legend className={lightLegend}>Sign in</Legend>
+            <p className={lightDescription}>
               Use the account you registered with. Sessions are stored server-side.
             </p>
 
             {error ? (
-              <p className="text-sm/6 text-red-400" role="alert">
+              <p className="text-sm text-red-600 dark:text-red-400" role="alert">
                 {error}
               </p>
             ) : null}
 
             <Field>
-              <Label className={labelClass}>Email</Label>
+              <Label className={lightLabel}>Email</Label>
               <Input
                 type="email"
                 name="email"
@@ -70,12 +71,12 @@ export default function LoginPage() {
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 required
-                className={inputClass}
+                className={lightInput}
               />
             </Field>
 
             <Field>
-              <Label className={labelClass}>Password</Label>
+              <Label className={lightLabel}>Password</Label>
               <Input
                 type="password"
                 name="password"
@@ -84,25 +85,28 @@ export default function LoginPage() {
                 onChange={(e) => setPassword(e.target.value)}
                 required
                 minLength={8}
-                className={inputClass}
+                className={lightInput}
               />
             </Field>
 
             <Field>
-              <Button type="submit" disabled={loading} className={clsx(primaryButtonClass, "mt-1 w-full")}>
+              <Button type="submit" disabled={loading} className={clsx(lightPrimaryButton, "mt-1 w-full")}>
                 {loading ? "Signing in…" : "Sign in"}
               </Button>
             </Field>
           </Fieldset>
         </form>
 
-        <p className="mt-6 text-center text-sm/6 text-white/50">
+        <p className="mt-6 text-center text-sm text-neutral-600 dark:text-neutral-400">
           No account?{" "}
-          <Link href="/register" className="font-medium text-white/80 hover:text-white underline-offset-2 hover:underline">
+          <Link
+            href="/register"
+            className="font-semibold text-neutral-900 underline-offset-2 hover:underline dark:text-neutral-100"
+          >
             Create one
           </Link>
         </p>
       </div>
-    </main>
+    </AuthShell>
   );
 }

@@ -1,7 +1,6 @@
 "use client";
 
 import dynamic from "next/dynamic";
-import InterviewChat from "./interview-chat";
 
 const AuroraHero = dynamic(
   () => import("@/components/aurora-hero").then((m) => m.AuroraHero),
@@ -11,11 +10,6 @@ const AuroraHero = dynamic(
   }
 );
 
-type Props = { userEmail: string | null };
-
-export function HomeClient({ userEmail }: Props) {
-  if (userEmail) {
-    return <InterviewChat userEmail={userEmail} />;
-  }
+export function HomeClient() {
   return <AuroraHero />;
 }
