@@ -33,6 +33,12 @@ yarn-error.log*
 # env files (can opt-in for committing if needed)
 .env*
 
+# local Gemini JSON (use GEMINI_CREDENTIALS_PATH); never commit keys
+gemini-credentials.json
+
+# GCP service account keys (Vertex)
+newface-*.json
+
 # vercel
 .vercel
 
