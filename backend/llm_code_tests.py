@@ -85,10 +85,13 @@ def ensure_problem_has_test_cases(problem: dict[str, Any]) -> dict[str, Any]:
         for ex in cp["examples"]:
             if not isinstance(ex, dict):
                 continue
-            if ex.get("input") is None or ex.get("output") is None:
+            if ex.get("input") is None:
+                continue
+            out_val = ex.get("output", ex.get("expected_output", ex.get("expected")))
+            if out_val is None:
                 continue
             collected.append(
-                {"input": str(ex["input"]).strip(), "expected_output": str(ex["output"]).strip()}
+                {"input": str(ex["input"]).strip(), "expected_output": str(out_val).strip()}
             )
 
     if not collected:

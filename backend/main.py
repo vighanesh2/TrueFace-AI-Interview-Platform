@@ -45,6 +45,73 @@ app.add_middleware(
 _sessions: dict[str, InterviewState] = {}
 
 
+def _is_coding_description_insufficient(desc: str) -> bool:
+    """True when the model left a placeholder or no real problem statement."""
+    t = desc.strip()
+    if not t:
+        return True
+    if len(t) < 32:
+        return True
+    tl = t.lower().rstrip(".")
+    if tl == "solve the problem in the editor":
+        return True
+    if "please use the code editor" in tl and len(t) < 120:
+        return True
+    if "use the code editor to solve" in tl and len(t) < 120:
+        return True
+    return False
+
+
+def _fallback_coding_description(fixed: dict[str, Any]) -> str:
+    """Deterministic copy so the panel always shows a concrete task, not editor-only boilerplate."""
+    title = str(fixed.get("title") or "").strip() or "Coding exercise"
+    spoken = str(fixed.get("spoken_summary") or "").strip()
+    examples = fixed.get("examples") if isinstance(fixed.get("examples"), list) else []
+    n_ex = sum(1 for x in examples if isinstance(x, dict))
+    tests = fixed.get("test_cases") if isinstance(fixed.get("test_cases"), list) else []
+    n_te = len(tests)
+
+    parts: list[str] = []
+    if spoken:
+        parts.append(spoken)
+    parts.append(
+        f"Your task: {title}. Implement a correct solution in the editor in one of the supported languages."
+    )
+    if n_ex:
+        parts.append(
+            f"This problem includes {n_ex} example(s) with sample input and output—your solution should match that behavior."
+        )
+    if n_te:
+        parts.append(
+            f"After you submit, your code is checked against the {n_te} input/expected pair(s) listed in this panel."
+        )
+    parts.append(
+        "Use the examples and tests below to clarify the required behavior, then write and submit your implementation."
+    )
+    return "\n\n".join(parts)
+
+
+def _prepare_coding_prompt_for_client(cp: dict[str, Any]) -> dict[str, Any]:
+    """
+    Before returning or persisting coding_prompt: ensure non-empty test_cases (may synthesize once),
+    merge spoken_summary into description when thin, and guarantee a non-placeholder description.
+    """
+    fixed = ensure_problem_has_test_cases(dict(cp))
+    desc = str(fixed.get("description") or "").strip()
+    spoken = str(fixed.get("spoken_summary") or "").strip()
+    generic = _is_coding_description_insufficient(desc)
+    if spoken:
+        if generic or not desc:
+            fixed["description"] = spoken
+        elif spoken.lower() not in desc.lower() and len(desc) < 160:
+            fixed["description"] = f"{desc}\n\n(Interviewer, spoken: {spoken})".strip()
+
+    desc2 = str(fixed.get("description") or "").strip()
+    if _is_coding_description_insufficient(desc2):
+        fixed["description"] = _fallback_coding_description(fixed)
+    return fixed
+
+
 class StartBody(BaseModel):
     knowledge: str = Field(..., min_length=1)
     mode: Literal["full", "behavioral"] = "full"
@@ -111,6 +178,9 @@ def session_start(body: StartBody) -> StartResponse:
         out = run_session_start(state)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e)) from e
+    out = dict(out)
+    if isinstance(out.get("coding_prompt"), dict):
+        out["coding_prompt"] = _prepare_coding_prompt_for_client(out["coding_prompt"])
     _sessions[sid] = out
     ph = out.get("phase") or "intake"
     return StartResponse(
@@ -172,7 +242,7 @@ def session_turn(session_id: str, body: TurnBody) -> TurnResponse:
 
         cp_raw = st.get("coding_prompt")
         if isinstance(cp_raw, dict) and (st.get("input_mode") or "") == "code":
-            cp = ensure_problem_has_test_cases(cp_raw)
+            cp = _prepare_coding_prompt_for_client(cp_raw)
             st["coding_prompt"] = cp
             try:
                 lang = (body.language or "python").strip().lower()
@@ -226,6 +296,8 @@ def session_turn(session_id: str, body: TurnBody) -> TurnResponse:
             cp_prev = st.get("coding_prompt")
             if isinstance(cp_prev, dict):
                 out["coding_prompt"] = cp_prev
+        if isinstance(out.get("coding_prompt"), dict):
+            out["coding_prompt"] = _prepare_coding_prompt_for_client(out["coding_prompt"])
     _sessions[session_id] = out
     ph = out.get("phase") or ""
     return TurnResponse(
@@ -250,4 +322,10 @@ def session_turn(session_id: str, body: TurnBody) -> TurnResponse:
 def session_state(session_id: str) -> dict[str, Any]:
     if session_id not in _sessions:
         raise HTTPException(status_code=404, detail="Unknown session_id")
-    return dict(_sessions[session_id])
+    st = dict(_sessions[session_id])
+    if (st.get("input_mode") or "") == "code":
+        cp = st.get("coding_prompt")
+        if isinstance(cp, dict):
+            st["coding_prompt"] = _prepare_coding_prompt_for_client(cp)
+            _sessions[session_id]["coding_prompt"] = st["coding_prompt"]
+    return st
