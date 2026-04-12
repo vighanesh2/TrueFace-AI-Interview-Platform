@@ -15,6 +15,7 @@
     "@heygen/liveavatar-web-sdk": "^0.0.13",
     "@react-three/drei": "^10.7.7",
     "@react-three/fiber": "^9.5.0",
+    "@vercel/blob": "^2.3.3",
     "bcryptjs": "^3.0.3",
     "framer-motion": "^12.38.0",
     "mongodb": "^7.1.1",

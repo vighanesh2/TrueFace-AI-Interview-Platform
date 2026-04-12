@@ -22,6 +22,7 @@ export default async function InterviewRecordingPage({ params }: Props) {
       recordingId={recordingId}
       interviewType={rec.type}
       recordingTitle={rec.title}
+      meetingVideoUrl={rec.meetingVideoUrl ?? null}
     />
   );
 }

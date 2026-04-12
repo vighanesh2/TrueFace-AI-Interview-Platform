@@ -13,6 +13,8 @@ export type RecordingWrite = {
   messageCount: number;
   createdAt: Date;
   updatedAt: Date;
+  /** Public Vercel Blob URL for a saved mock-interview video, when recorded */
+  meetingVideoUrl?: string;
 };
 
 export type RecordingDoc = RecordingWrite & { _id: ObjectId };
@@ -95,4 +97,23 @@ export async function setRecordingCompleted(recordingId: string, userId: ObjectI
     { _id: oid, userId },
     { $set: { status: "completed" as RecordingStatus, updatedAt: new Date() } }
   );
+}
+
+export async function setRecordingMeetingVideo(
+  recordingId: string,
+  userId: ObjectId,
+  meetingVideoUrl: string
+): Promise<boolean> {
+  let oid: ObjectId;
+  try {
+    oid = new ObjectId(recordingId);
+  } catch {
+    return false;
+  }
+  const db = await getDb();
+  const r = await recordingsCollection(db).updateOne(
+    { _id: oid, userId },
+    { $set: { meetingVideoUrl, updatedAt: new Date() } }
+  );
+  return r.matchedCount > 0;
 }

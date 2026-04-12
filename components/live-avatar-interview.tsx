@@ -2,6 +2,7 @@
 
 import { Button, Listbox, ListboxButton, ListboxOption, ListboxOptions } from "@headlessui/react";
 import { LiveAvatarSession, SessionEvent } from "@heygen/liveavatar-web-sdk";
+import { upload } from "@vercel/blob/client";
 import clsx from "clsx";
 import Image from "next/image";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
@@ -161,6 +162,95 @@ function IconFullscreenExit({ className }: { className?: string }) {
   );
 }
 
+function IconRecord({ className }: { className?: string }) {
+  return (
+    <svg className={className} width="22" height="22" viewBox="0 0 24 24" fill="none" aria-hidden>
+      <circle cx="12" cy="12" r="6" fill="currentColor" />
+    </svg>
+  );
+}
+
+function stopCompositeDraw(rafRef: { current: number | null }) {
+  if (rafRef.current != null) {
+    cancelAnimationFrame(rafRef.current);
+    rafRef.current = null;
+  }
+}
+
+type VideoWithCapture = HTMLVideoElement & {
+  captureStream?: (frameRate?: number) => MediaStream;
+};
+
+/** Captures the avatar video (and optional PiP camera) for MediaRecorder. */
+function buildMeetingRecordStream(
+  avatarEl: HTMLVideoElement,
+  userEl: HTMLVideoElement | null,
+  includeCamera: boolean,
+  rafRef: { current: number | null }
+): MediaStream | null {
+  const cap = (avatarEl as VideoWithCapture).captureStream;
+  if (typeof cap !== "function") return null;
+  const base = cap.call(avatarEl, 30);
+  if (!includeCamera || !userEl) {
+    return base;
+  }
+
+  const w = Math.max(avatarEl.videoWidth || 1280, 640);
+  const h = Math.max(avatarEl.videoHeight || 720, 360);
+  const canvas = document.createElement("canvas");
+  canvas.width = w;
+  canvas.height = h;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) {
+    return base;
+  }
+
+  const pipW = Math.round(w * 0.22);
+  const pipH = Math.round(pipW * (9 / 16));
+  const pad = 16;
+
+  const draw = () => {
+    if (avatarEl.readyState >= 2) {
+      try {
+        ctx.drawImage(avatarEl, 0, 0, w, h);
+      } catch {
+        /* skip frame */
+      }
+    }
+    if (userEl.readyState >= 2) {
+      try {
+        ctx.drawImage(userEl, w - pipW - pad, h - pipH - pad, pipW, pipH);
+      } catch {
+        /* skip frame */
+      }
+    }
+    rafRef.current = requestAnimationFrame(draw);
+  };
+  rafRef.current = requestAnimationFrame(draw);
+
+  const canvasStream = canvas.captureStream(30);
+  const vTrack = canvasStream.getVideoTracks()[0];
+  const aTracks = base.getAudioTracks();
+  return new MediaStream(vTrack ? [vTrack, ...aTracks] : [...canvasStream.getTracks(), ...aTracks]);
+}
+
+function pickRecorderMime(): string | undefined {
+  const candidates = ["video/webm;codecs=vp9,opus", "video/webm;codecs=vp8,opus", "video/webm"];
+  for (const m of candidates) {
+    if (typeof MediaRecorder !== "undefined" && MediaRecorder.isTypeSupported(m)) {
+      return m;
+    }
+  }
+  return undefined;
+}
+
+/** Vercel Blob allowlist matches top-level types only (no `;codecs=…` suffix). */
+function blobUploadContentType(raw: string): string {
+  const base = raw.split(";")[0]?.trim().toLowerCase() ?? "";
+  if (base === "video/webm" || base === "video/x-matroska") return base;
+  return "video/webm";
+}
+
 function ZoomControlButton({
   active,
   danger,
@@ -242,6 +332,16 @@ export function LiveAvatarInterview() {
   const pipResizeDragRef = useRef<{ startX: number; startW: number } | null>(null);
   const answerInputRef = useRef<HTMLInputElement | null>(null);
 
+  const meetingComposeRafRef = useRef<number | null>(null);
+  const meetingRecordStreamRef = useRef<MediaStream | null>(null);
+  const meetingRecorderRef = useRef<MediaRecorder | null>(null);
+  const meetingChunksRef = useRef<Blob[]>([]);
+  const meetingRecordingIdRef = useRef<string | null>(null);
+  const meetingBlobPathRef = useRef<string | null>(null);
+  const meetingStopUploadPromiseRef = useRef<Promise<void> | null>(null);
+
+  const [meetingRecordState, setMeetingRecordState] = useState<"idle" | "recording" | "uploading">("idle");
+
   const [pipWidth, setPipWidthState] = useState(200);
   useEffect(() => {
     try {
@@ -255,6 +355,32 @@ export function LiveAvatarInterview() {
     } catch {
       /* ignore */
     }
+  }, []);
+
+  /**
+   * HeyGen’s SDK uses LiveKit WebRTC; tearing down the room often logs
+   * `Unknown DataChannel error on lossy` / `reliable` to the console. That is
+   * usually harmless, but Next.js dev treats `console.error` as a runtime error.
+   * Filter for the lifetime of this page so teardown after `sessionActive` goes
+   * false is still covered.
+   */
+  useEffect(() => {
+    if (process.env.NODE_ENV !== "development") return;
+    const orig = console.error.bind(console);
+    console.error = (...args: unknown[]) => {
+      const head = args[0];
+      const text =
+        typeof head === "string"
+          ? head
+          : head instanceof Error
+            ? head.message
+            : String(head ?? "");
+      if (text.includes("Unknown DataChannel error on")) return;
+      orig(...args);
+    };
+    return () => {
+      console.error = orig;
+    };
   }, []);
 
   const persistPipWidth = useCallback((w: number) => {
@@ -472,6 +598,163 @@ export function LiveAvatarInterview() {
     };
   }, []);
 
+  const ensureMeetingRecording = useCallback(async (): Promise<{ recordingId: string; blobPath: string } | null> => {
+    if (meetingRecordingIdRef.current && meetingBlobPathRef.current) {
+      return { recordingId: meetingRecordingIdRef.current, blobPath: meetingBlobPathRef.current };
+    }
+    const res = await fetch("/api/recordings", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ type: interviewMode }),
+    });
+    if (res.status === 401) {
+      alert("Sign in again to save a meeting recording.");
+      return null;
+    }
+    if (!res.ok) {
+      const d = (await res.json()) as { error?: string };
+      alert(d.error || "Could not create recording.");
+      return null;
+    }
+    const data = (await res.json()) as { id?: string; meetingBlobPath?: string };
+    if (!data.id || !data.meetingBlobPath) return null;
+    meetingRecordingIdRef.current = data.id;
+    meetingBlobPathRef.current = data.meetingBlobPath;
+    return { recordingId: data.id, blobPath: data.meetingBlobPath };
+  }, [interviewMode]);
+
+  const stopMeetingRecordingAndUpload = useCallback(async () => {
+    if (meetingStopUploadPromiseRef.current) {
+      await meetingStopUploadPromiseRef.current;
+      return;
+    }
+
+    const work = (async () => {
+      const recorder = meetingRecorderRef.current;
+      if (!recorder || recorder.state === "inactive") {
+        stopCompositeDraw(meetingComposeRafRef);
+        meetingRecordStreamRef.current?.getTracks().forEach((t) => t.stop());
+        meetingRecordStreamRef.current = null;
+        meetingRecorderRef.current = null;
+        setMeetingRecordState("idle");
+        return;
+      }
+
+      setMeetingRecordState("uploading");
+      const mimeType = recorder.mimeType || "video/webm";
+
+      await new Promise<void>((resolve) => {
+        const done = () => resolve();
+        recorder.addEventListener("stop", done, { once: true });
+        try {
+          recorder.stop();
+        } catch {
+          done();
+        }
+      });
+
+      stopCompositeDraw(meetingComposeRafRef);
+      const s = meetingRecordStreamRef.current;
+      if (s) {
+        s.getTracks().forEach((t) => t.stop());
+        meetingRecordStreamRef.current = null;
+      }
+      meetingRecorderRef.current = null;
+
+      const recordingId = meetingRecordingIdRef.current;
+      const blobPath = meetingBlobPathRef.current;
+      const chunks = meetingChunksRef.current;
+      meetingChunksRef.current = [];
+      const blob = new Blob(chunks, { type: mimeType });
+
+      if (blob.size < 64 || !recordingId || !blobPath) {
+        setMeetingRecordState("idle");
+        return;
+      }
+
+      try {
+        const result = await upload(blobPath, blob, {
+          access: "public",
+          handleUploadUrl: "/api/meeting-blob",
+          clientPayload: JSON.stringify({ recordingId }),
+          contentType: blobUploadContentType(blob.type || mimeType),
+          multipart: true,
+        });
+        const patchRes = await fetch(`/api/recordings/${recordingId}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ meetingVideoUrl: result.url }),
+        });
+        if (!patchRes.ok) {
+          throw new Error("Saved file but could not link to your account.");
+        }
+        alert("Recording saved. Open Recordings on the dashboard to watch or share.");
+      } catch (e) {
+        console.error(e);
+        alert(e instanceof Error ? e.message : "Upload failed.");
+      } finally {
+        setMeetingRecordState("idle");
+      }
+    })();
+
+    meetingStopUploadPromiseRef.current = work;
+    try {
+      await work;
+    } finally {
+      meetingStopUploadPromiseRef.current = null;
+    }
+  }, []);
+
+  const startMeetingRecording = useCallback(async () => {
+    if (!sessionActive || meetingRecordState !== "idle" || meetingRecorderRef.current) return;
+    const avatarEl = document.getElementById("avatar-video") as HTMLVideoElement | null;
+    if (!avatarEl) return;
+
+    const ensured = await ensureMeetingRecording();
+    if (!ensured) return;
+
+    const includeCamera = cameraOn;
+    const userEl = userVideoRef.current;
+    const stream = buildMeetingRecordStream(avatarEl, userEl, includeCamera, meetingComposeRafRef);
+    if (!stream || stream.getTracks().length === 0) {
+      alert("Recording is not supported in this browser. Try Chrome or Edge.");
+      return;
+    }
+
+    meetingRecordStreamRef.current = stream;
+    meetingChunksRef.current = [];
+
+    const mime = pickRecorderMime();
+    let recorder: MediaRecorder;
+    try {
+      recorder = mime ? new MediaRecorder(stream, { mimeType: mime }) : new MediaRecorder(stream);
+    } catch (e) {
+      console.error(e);
+      stopCompositeDraw(meetingComposeRafRef);
+      stream.getTracks().forEach((t) => t.stop());
+      meetingRecordStreamRef.current = null;
+      alert("Could not start recording.");
+      return;
+    }
+
+    recorder.ondataavailable = (e) => {
+      if (e.data.size > 0) meetingChunksRef.current.push(e.data);
+    };
+
+    meetingRecorderRef.current = recorder;
+    try {
+      recorder.start(1000);
+      setMeetingRecordState("recording");
+    } catch (e) {
+      console.error(e);
+      stopCompositeDraw(meetingComposeRafRef);
+      stream.getTracks().forEach((t) => t.stop());
+      meetingRecordStreamRef.current = null;
+      meetingRecorderRef.current = null;
+      alert("Could not start recording.");
+    }
+  }, [sessionActive, meetingRecordState, cameraOn, ensureMeetingRecording]);
+
   useEffect(() => {
     if (!cameraOn) return;
     const stream = userStreamRef.current;
@@ -482,6 +765,8 @@ export function LiveAvatarInterview() {
   }, [cameraOn]);
 
   const stopAvatarSession = async () => {
+    await stopMeetingRecordingAndUpload();
+
     const shell = stageContainerRef.current;
     if (shell && getFullscreenElement() === shell) {
       try {
@@ -528,6 +813,8 @@ export function LiveAvatarInterview() {
     setIsAvatarStarting(true);
     setMessages([]);
     brainSessionIdRef.current = null;
+    meetingRecordingIdRef.current = null;
+    meetingBlobPathRef.current = null;
 
     const modeAtStart = interviewMode;
     const genderAtStart = interviewerGender;
@@ -703,6 +990,23 @@ export function LiveAvatarInterview() {
         stream.getTracks().forEach((t) => t.stop());
         userStreamRef.current = null;
       }
+    };
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      const rec = meetingRecorderRef.current;
+      if (rec && rec.state !== "inactive") {
+        try {
+          rec.stop();
+        } catch {
+          /* ignore */
+        }
+      }
+      stopCompositeDraw(meetingComposeRafRef);
+      meetingRecordStreamRef.current?.getTracks().forEach((t) => t.stop());
+      meetingRecordStreamRef.current = null;
+      meetingRecorderRef.current = null;
     };
   }, []);
 
@@ -1127,6 +1431,25 @@ export function LiveAvatarInterview() {
                   disabled={isChatting}
                 >
                   {cameraOn ? <IconVideoOn /> : <IconVideoOff />}
+                </ZoomControlButton>
+
+                <ZoomControlButton
+                  danger={meetingRecordState === "recording"}
+                  active={false}
+                  label={
+                    meetingRecordState === "uploading"
+                      ? "Saving recording…"
+                      : meetingRecordState === "recording"
+                        ? "Stop and save recording"
+                        : "Record meeting"
+                  }
+                  onClick={() => {
+                    if (meetingRecordState === "recording") void stopMeetingRecordingAndUpload();
+                    else void startMeetingRecording();
+                  }}
+                  disabled={isChatting || meetingRecordState === "uploading"}
+                >
+                  <IconRecord />
                 </ZoomControlButton>
 
                 <ZoomControlButton

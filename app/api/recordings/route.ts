@@ -23,6 +23,7 @@ export async function GET() {
       messageCount: r.messageCount,
       createdAt: r.createdAt.toISOString(),
       updatedAt: r.updatedAt.toISOString(),
+      meetingVideoUrl: r.meetingVideoUrl ?? null,
     })),
   });
 }
@@ -47,6 +48,15 @@ export async function POST(req: Request) {
   } catch (e) {
     console.error("Recording indexes:", e);
   }
-  const id = await createRecording(new ObjectId(user.id), type as InterviewType);
-  return NextResponse.json({ id: id.toString(), type }, { status: 201 });
+  const uid = new ObjectId(user.id);
+  const id = await createRecording(uid, type as InterviewType);
+  const idStr = id.toString();
+  return NextResponse.json(
+    {
+      id: idStr,
+      type,
+      meetingBlobPath: `meetings/${user.id}/${idStr}.webm`,
+    },
+    { status: 201 }
+  );
 }

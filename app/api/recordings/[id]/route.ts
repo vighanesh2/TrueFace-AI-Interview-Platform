@@ -5,6 +5,7 @@ import {
   bumpRecordingMessageCount,
   getRecordingForUser,
   setRecordingCompleted,
+  setRecordingMeetingVideo,
 } from "@/lib/recordings";
 
 type Ctx = { params: Promise<{ id: string }> };
@@ -27,6 +28,7 @@ export async function GET(_req: Request, ctx: Ctx) {
     messageCount: rec.messageCount,
     createdAt: rec.createdAt.toISOString(),
     updatedAt: rec.updatedAt.toISOString(),
+    meetingVideoUrl: rec.meetingVideoUrl ?? null,
   });
 }
 
@@ -36,7 +38,7 @@ export async function PATCH(req: Request, ctx: Ctx) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
   const { id } = await ctx.params;
-  let body: { messageDelta?: number; complete?: boolean };
+  let body: { messageDelta?: number; complete?: boolean; meetingVideoUrl?: string };
   try {
     body = await req.json();
   } catch {
@@ -49,6 +51,12 @@ export async function PATCH(req: Request, ctx: Ctx) {
   if (body.complete === true) {
     await setRecordingCompleted(id, uid);
   }
+  if (typeof body.meetingVideoUrl === "string" && body.meetingVideoUrl.startsWith("https://")) {
+    const ok = await setRecordingMeetingVideo(id, uid, body.meetingVideoUrl);
+    if (!ok) {
+      return NextResponse.json({ error: "Not found" }, { status: 404 });
+    }
+  }
   const rec = await getRecordingForUser(id, uid);
   if (!rec) {
     return NextResponse.json({ error: "Not found" }, { status: 404 });
@@ -60,5 +68,6 @@ export async function PATCH(req: Request, ctx: Ctx) {
     status: rec.status,
     messageCount: rec.messageCount,
     updatedAt: rec.updatedAt.toISOString(),
+    meetingVideoUrl: rec.meetingVideoUrl ?? null,
   });
 }
