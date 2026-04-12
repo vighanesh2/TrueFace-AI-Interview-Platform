@@ -16,7 +16,7 @@ from .state import InterviewState
 
 _PHASE_LABELS: dict[str, str] = {
     "intake": "Intake",
-    "technical": "Part 1 — Technical",
+    "technical": "Coding session",
     "system_design": "Part 2 — System design",
     "behavioral": "Part 3 — Behavioral",
     "wrap_up": "Closing",
@@ -37,6 +37,8 @@ app.add_middleware(
         "http://localhost:3000",
         "http://127.0.0.1:3000",
     ],
+    # Next dev often uses :3001+ if :3000 is taken; direct browser calls need this.
+    allow_origin_regex=r"http://(localhost|127\.0\.0\.1):\d+",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -114,7 +116,7 @@ def _prepare_coding_prompt_for_client(cp: dict[str, Any]) -> dict[str, Any]:
 
 class StartBody(BaseModel):
     knowledge: str = Field(..., min_length=1)
-    mode: Literal["full", "behavioral"] = "full"
+    mode: Literal["full", "behavioral", "coding"] = "full"
 
 
 class TurnBody(BaseModel):
@@ -218,6 +220,24 @@ def session_turn(session_id: str, body: TurnBody) -> TurnResponse:
     if session_id not in _sessions:
         raise HTTPException(status_code=404, detail="Unknown session_id")
     st = dict(_sessions[session_id])
+    if st.get("interview_done"):
+        ph = st.get("phase") or "wrap_up"
+        return TurnResponse(
+            response="This session is already complete.",
+            phase=str(ph),
+            phase_label=_phase_label(ph),
+            turn=int(st.get("turn_count") or 0),
+            topic=st.get("current_topic") or "",
+            interview_done=True,
+            current_part_index=int(st.get("current_part_index") or 0),
+            roadmap=st.get("roadmap"),
+            input_mode=str(st.get("input_mode") or "chat"),
+            coding_prompt=st.get("coding_prompt") if isinstance(st.get("coding_prompt"), dict) else None,
+            integrity_flags=list(st.get("integrity_flags") or []),
+            test_results=st.get("test_results") if isinstance(st.get("test_results"), list) else None,
+            awaiting_explanation=bool(st.get("awaiting_explanation")),
+            test_runner=st.get("last_test_runner") if isinstance(st.get("last_test_runner"), str) else None,
+        )
     if not (body.code and body.code.strip()):
         st["integrity_flags"] = []
     hist = list(st.get("conversation_history") or [])

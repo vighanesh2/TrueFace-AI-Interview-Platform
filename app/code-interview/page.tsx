@@ -86,10 +86,11 @@ function integrityLines(flags: string[]): string[] {
 }
 
 function interviewApiBase(): string {
-  return (
-    process.env.NEXT_PUBLIC_INTERVIEW_API_URL?.replace(/\/$/, "") ||
-    "http://127.0.0.1:8000"
-  );
+  const custom = process.env.NEXT_PUBLIC_INTERVIEW_API_URL?.replace(/\/$/, "");
+  if (custom) return custom;
+  // Same-origin proxy: browser → Next → FastAPI. Avoids CORS (e.g. Next on :3001) and
+  // “Failed to fetch” when the backend is only reachable from the Node process.
+  return "/api/coding-brain";
 }
 
 /** Server session is source of truth if /turn JSON omits nested `coding_prompt` (serialization edge cases). */
@@ -237,7 +238,7 @@ export default function Home() {
       const res = await fetch(`${base}/session/start`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ knowledge: k }),
+        body: JSON.stringify({ knowledge: k, mode: "coding" }),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {

@@ -42,3 +42,7 @@ class InterviewState(TypedDict, total=False):
     awaiting_explanation: bool
     # "gemini" after automated test evaluation
     last_test_runner: str
+    # Full interview: exactly one technical chat Q, then coding editor (planner sets True)
+    single_warmup_then_code: bool
+    # Coding-only session: intake → editor → feedback → done (no verbal technical / system design)
+    coding_only_interview: bool

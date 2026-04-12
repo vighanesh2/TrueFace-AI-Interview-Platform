@@ -8,7 +8,6 @@ from typing import Any
 from ..state import InterviewState
 
 _DEFAULT_TECH = ["problem_decomposition", "arrays_hashing", "trees_graphs"]
-_EXTRA_TECH = ["complexity_tradeoffs", "concurrency_basics", "testing_and_quality"]
 _DEFAULT_SD = ["api_and_scaling", "caching_rate_limits"]
 _DEFAULT_BEH = ["teamwork_conflict", "failure_and_learning"]
 _EXTRA_BEH = [
@@ -19,7 +18,6 @@ _EXTRA_BEH = [
     "mistake_accountability",
     "customer_conflict",
 ]
-_MIN_TECH_TOPICS = 4
 _MIN_BEH_TOPICS = 6
 
 
@@ -28,6 +26,7 @@ def _slug(s: str) -> str:
 
 
 def build_agenda(state: InterviewState) -> dict:
+    """Full interview: one conversational technical warmup → coding → system design (no long technical loop)."""
     raw_topics = state.get("extracted_topics") or ["general_cs"]
     seen: set[str] = set()
     technical: list[str] = []
@@ -40,18 +39,13 @@ def build_agenda(state: InterviewState) -> dict:
         if d not in seen:
             seen.add(d)
             technical.append(d)
-    for d in _EXTRA_TECH:
-        if len(technical) >= _MIN_TECH_TOPICS:
-            break
-        if d not in seen:
-            seen.add(d)
-            technical.append(d)
-    technical = technical[:10]
+    # Single warmup thread, then the router switches to the code editor.
+    technical = [technical[0]] if technical else ["general_cs"]
 
     agenda = {
         "technical": technical,
         "system_design": list(_DEFAULT_SD),
-        "behavioral": list(_DEFAULT_BEH),
+        "behavioral": [],
     }
     first = agenda["technical"][0]
     return {
@@ -61,6 +55,7 @@ def build_agenda(state: InterviewState) -> dict:
         "follow_up_depth": 0,
         "current_part_index": 1,
         "technical_user_turns": 0,
+        "single_warmup_then_code": True,
     }
 
 
@@ -93,6 +88,21 @@ def build_agenda_behavioral_only(state: InterviewState) -> dict:
         "follow_up_depth": 0,
         "current_part_index": 1,
         "technical_user_turns": 0,
+        "single_warmup_then_code": False,
+    }
+
+
+def build_agenda_coding_only(state: InterviewState) -> dict:
+    """Intake → editor only: no verbal technical or system-design phases."""
+    return {
+        "topic_agenda": {"technical": [], "system_design": [], "behavioral": []},
+        "phase": "technical",
+        "current_topic": "coding_practice",
+        "follow_up_depth": 0,
+        "current_part_index": 1,
+        "technical_user_turns": 0,
+        "single_warmup_then_code": False,
+        "coding_only_interview": True,
     }
 
 
@@ -105,23 +115,15 @@ def build_roadmap_blob(state: InterviewState) -> dict[str, Any]:
             "parts": [
                 {
                     "id": "technical",
-                    "title": "Part 1 — Technical",
+                    "title": "Part 1 — Technical warmup",
                     "order": 1,
-                    "summary": (
-                        "Technical discussion and follow-ups; room for coding exercises when an editor is available."
-                    ),
+                    "summary": "One conversational fundamentals question, then a timed coding exercise in the editor.",
                 },
                 {
                     "id": "system_design",
                     "title": "Part 2 — System design",
                     "order": 2,
                     "summary": "System design discussion tailored to the candidate’s level.",
-                },
-                {
-                    "id": "behavioral",
-                    "title": "Part 3 — Behavioral",
-                    "order": 3,
-                    "summary": "Behavioral and experience questions.",
                 },
             ],
             "closing": "Short wrap-up and thanks at the end.",
@@ -143,5 +145,23 @@ def build_roadmap_blob_behavioral(state: InterviewState) -> dict[str, Any]:
                 },
             ],
             "closing": "Short wrap-up and thanks at the end.",
+        }
+    }
+
+
+def build_roadmap_blob_coding(state: InterviewState) -> dict[str, Any]:
+    level = state.get("skill_level") or "intermediate"
+    return {
+        "roadmap": {
+            "skill_level": level,
+            "parts": [
+                {
+                    "id": "coding",
+                    "title": "Coding exercise",
+                    "order": 1,
+                    "summary": "Timed problem in the editor; brief feedback when you submit.",
+                },
+            ],
+            "closing": "Short wrap-up after submission.",
         }
     }

@@ -345,6 +345,39 @@ def _emit_coding_problem(state: InterviewState) -> dict:
     ctx = (state.get("retrieved_context") or "")[:6000]
     tail = _conversation_tail(state, 12)
     variety = _coding_problem_variety_hint(state)
+    coding_only = bool(state.get("coding_only_interview"))
+    system_tail = (
+        "There was no separate verbal technical question — use intake (role, languages, goals) plus topic focus.\n"
+        "Pick a standard interview-style problem suited to their level, not the shortest toy problem."
+        if coding_only
+        else (
+            "If the verbal question was broad, pick a standard interview-style problem that fits the topic "
+            "and transcript, not the shortest string toy problem."
+        )
+    )
+    human_block = (
+        (
+            f"Topic focus: {topic}.\nReference snippets:\n{ctx}\n\n"
+            "Intake and conversation so far (tailor difficulty and problem domain to role, languages, and goals):\n"
+            f"{tail}\n\n"
+            f"Variety nudge (use ONLY if it fits; transcript wins): consider {variety}.\n\n"
+            "Design one concise data-structures/algorithms problem they can implement in the editor. "
+            "Include at least 3 test_cases with concrete input and expected_output strings. "
+            "Keep description under 220 words."
+        )
+        if coding_only
+        else (
+            f"Topic focus: {topic}.\nReference snippets:\n{ctx}\n\n"
+            "Recent interview conversation (your coding task MUST follow the last technical question):\n"
+            f"{tail}\n\n"
+            f"Variety nudge (use ONLY if it fits the transcript and topic; transcript wins): consider "
+            f"{variety}.\n\n"
+            "Design one concise coding problem (data structures / algorithms) that the candidate can implement "
+            "in code — align with what they were just asked verbally. "
+            "Include at least 3 test_cases with concrete input and expected_output strings. "
+            "Keep description under 220 words."
+        )
+    )
     raw = llm.invoke(
         [
             SystemMessage(
@@ -359,24 +392,11 @@ def _emit_coding_problem(state: InterviewState) -> dict:
                     "Quality rules: The title must name the real task (e.g. 'Two Sum', 'Merge Overlapping Intervals'). "
                     "The description must state the full problem—not 'use the editor' boilerplate.\n"
                     "Do NOT default to these clichés unless the conversation literally asked for that exact task: "
-                    "reverse a string, palindrome check, FizzBuzz, naive Fibonacci nth, or 'implement strlen'. "
-                    "If the verbal question was broad, pick a standard interview-style problem that fits the topic "
-                    "and transcript, not the shortest string toy problem."
+                    "reverse a string, palindrome check, FizzBuzz, naive Fibonacci nth, or 'implement strlen'.\n"
+                    + system_tail
                 )
             ),
-            HumanMessage(
-                content=(
-                    f"Topic focus: {topic}.\nReference snippets:\n{ctx}\n\n"
-                    "Recent interview conversation (your coding task MUST follow the last technical question):\n"
-                    f"{tail}\n\n"
-                    f"Variety nudge (use ONLY if it fits the transcript and topic; transcript wins): consider "
-                    f"{variety}.\n\n"
-                    "Design one concise coding problem (data structures / algorithms) that the candidate can implement "
-                    "in code — align with what they were just asked verbally. "
-                    "Include at least 3 test_cases with concrete input and expected_output strings. "
-                    "Keep description under 220 words."
-                )
-            ),
+            HumanMessage(content=human_block),
         ]
     )
     text = text_from_llm_response(raw)
@@ -393,6 +413,11 @@ def _emit_coding_problem(state: InterviewState) -> dict:
         "turn_count": int(state.get("turn_count") or 0) + 1,
         "input_mode": "code",
     }
+
+
+def open_coding_session(state: InterviewState) -> dict:
+    """After intake in coding-only mode: structured problem + editor (no verbal technical round)."""
+    return _emit_coding_problem(state)
 
 
 def _evaluate_coding_submission(state: InterviewState) -> dict:
@@ -416,6 +441,37 @@ def _evaluate_coding_submission(state: InterviewState) -> dict:
             "Ask them in one warm sentence to walk through their solution step by step in chat next. "
             "Do NOT ask a new technical topic question yet — that comes after they explain."
         )
+    deferred_raw = state.get("deferred_next_topic")
+    to_system_design = isinstance(deferred_raw, str) and deferred_raw == ""
+    coding_only = bool(state.get("coding_only_interview"))
+    if coding_only:
+        post_code_instruction = (
+            " Keep the reply under 3 short sentences total."
+            if paste
+            else (
+                " In 3–4 short sentences: comment on approach/correctness/complexity, thank them warmly, "
+                "and close — this coding practice session is complete. "
+                "Do NOT introduce system design, another coding exercise, or further interview phases."
+            )
+        )
+    else:
+        post_code_instruction = (
+            (
+                " In 2–3 short sentences: comment briefly on approach/correctness/complexity. "
+                "Then clearly transition to **Part 2 — system design**: one short handoff line, then **one** concrete "
+                "system-design question (APIs, scaling, storage, consistency, or reliability). "
+                "Do NOT ask another coding or data-structures question."
+            )
+            if to_system_design and not paste
+            else (
+                " In 2–3 short sentences: briefly comment on approach/correctness/complexity. "
+                "If integrity flags are present (and not the paste walkthrough case above), weave one gentle sentence "
+                "that a real proctor might notice. "
+                "Then ask ONE short follow-up technical question to continue the interview."
+                if not paste
+                else " Keep the reply under 3 short sentences total."
+            )
+        )
     raw = llm.invoke(
         [
             SystemMessage(content=_SYSTEM),
@@ -427,14 +483,7 @@ def _evaluate_coding_submission(state: InterviewState) -> dict:
                     f"Reference snippets:\n{ctx}\n\n"
                     f"{flag_note}\n\n"
                     + sys_add
-                    + (
-                        " In 2–3 short sentences: briefly comment on approach/correctness/complexity. "
-                        "If integrity flags are present (and not the paste walkthrough case above), weave one gentle sentence "
-                        "that a real proctor might notice. "
-                        "Then ask ONE short follow-up technical question to continue the interview."
-                        if not paste
-                        else " Keep the reply under 3 short sentences total."
-                    )
+                    + post_code_instruction
                 )
             ),
         ]
@@ -442,7 +491,6 @@ def _evaluate_coding_submission(state: InterviewState) -> dict:
     text = text_from_llm_response(raw)
     hist = list(state.get("conversation_history") or [])
     hist.append({"role": "assistant", "content": text})
-    deferred_raw = state.get("deferred_next_topic")
     deferred = deferred_raw if isinstance(deferred_raw, str) else ""
     out: dict[str, Any] = {
         "next_response": text,
@@ -456,6 +504,13 @@ def _evaluate_coding_submission(state: InterviewState) -> dict:
     }
     if paste:
         out["awaiting_explanation"] = True
+        return out
+
+    if coding_only:
+        out["phase"] = "wrap_up"
+        out["current_topic"] = "closing"
+        out["current_part_index"] = 4
+        out["interview_done"] = True
         return out
 
     if deferred:
@@ -485,13 +540,12 @@ def roadmap_and_open_technical(state: InterviewState) -> dict:
             HumanMessage(
                 content=(
                     "Intake is complete. In ONE reply (no bullet lists, no syllabus tone):\n"
-                    "Give a short, warm transition — like you're ready to start the technical portion — "
-                    "and lightly mention that later you'll also touch system design and behavioral topics, "
-                    "in plain language. Do NOT say how many areas, topics, or questions you will cover. "
-                    "Do NOT sound like you're reading a schedule.\n"
-                    "Optionally one casual line that coding on an editor may show up later; keep it brief.\n"
-                    "Then ask ONE first technical question aligned with topic "
-                    f"'{topic}' and with the target role / job description when provided. "
+                    "Give a short, warm transition: they will answer exactly ONE technical question in chat, "
+                    "then move straight to a timed coding exercise in the editor, then system design. "
+                    "Do NOT stack multiple questions, numbered lists of questions, or 'Part A / Part B' prompts — "
+                    "exactly one clear question only.\n"
+                    "Then ask that single technical question aligned with topic "
+                    f"'{topic}' and the target role / job description when provided. "
                     "It must be CS fundamentals, data structures, or algorithms — "
                     "not system design, scalability, or distributed architecture (save that for later). "
                     "Keep total under 160 words.\n\n"
