@@ -1,36 +1,124 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# TrueFace — Interview the Real You
 
-## Getting Started
+> The interview platform where candidates prove their skills are real — and companies can verify it.
 
-First, run the development server:
+Built at **HackDartmouth XI** by Verna, Bharath, Vighanesh, and Sri Ram.
 
+---
+
+## What is TrueFace?
+
+TrueFace is a two-sided AI interview platform:
+
+**For candidates:** Practice with a photorealistic LiveAvatar AI interviewer. Get real-time feedback on filler words, pacing, confidence, and reasoning depth. Review saved recordings to improve.
+
+**For companies:** Get a live fraud detection dashboard during every interview. Catch deepfakes, voice cloning, AI-fed answers, and hidden copilots in real time. Receive a signed authenticity report after each session.
+
+---
+
+## Features
+
+### Candidate Side
+- Photorealistic LiveAvatar AI interviewer (HeyGen)
+- Adaptive questioning — technical and behavioral modes
+- Real-time filler word detection
+- Speech pacing and confidence analysis
+- Session recordings with transcript review
+- Post-session feedback report
+
+### Company Side
+- Live monitor dashboard — 5-signal authenticity scoring
+- Deepfake detection (ViT + SigLIP ensemble)
+- Voice clone detection (librosa + spectral analysis)
+- AI assistance likelihood (reasoning continuity + semantic threading)
+- Response latency pattern analysis
+- Proctoring — tab switches, paste events, window blur detection
+- Signed authenticity report after each session
+
+---
+
+## Tech Stack
+
+| Layer | Technology |
+|-------|-----------|
+| Frontend | Next.js 16, TypeScript, Tailwind CSS |
+| AI Interviewer | HeyGen LiveAvatar SDK |
+| Interview Brain | LangGraph + Vertex AI (Gemini 2.5 Flash) |
+| ML Engine | FastAPI, Python, ViT, SigLIP, Whisper, MediaPipe |
+| LLM | Groq / Llama-3.3-70b-versatile |
+| Vector DB | Pinecone |
+| Database | MongoDB Atlas |
+| Auth | Custom session auth |
+
+---
+
+## Running Locally
+
+You need 3 servers running simultaneously:
+
+### 1. Interview Brain (port 8000)
 ```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+cd HackDartmouthXI
+source .venv/bin/activate
+export GOOGLE_APPLICATION_CREDENTIALS="./backend/newface-493021-1ef8bc846b2c.json"
+export GOOGLE_CLOUD_PROJECT="newface-493021"
+export GOOGLE_CLOUD_LOCATION="us-central1"
+export GEMINI_MODEL="gemini-2.5-flash"
+export PINECONE_API_KEY="your_key"
+export PINECONE_INDEX_NAME="trueface"
+export PINECONE_HOST="your_host"
+uvicorn backend.main:app --reload --host 127.0.0.1 --port 8000
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+### 2. ML Detection Engine (port 8001)
+```bash
+cd ml-engine
+source ~/trueface-ml/bin/activate
+export GROQ_API_KEY="your_key"
+python3 main.py
+```
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+### 3. Frontend (port 3000)
+```bash
+cd HackDartmouthXI
+npm install
+npm run dev
+```
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+Open `http://localhost:3000`
 
-## Learn More
+---
 
-To learn more about Next.js, take a look at the following resources:
+## Environment Variables
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+Create `.env.local` in the root:
+HEYGEN_API_KEY=your_key
+GROQ_API_KEY=your_key
+MONGODB_URI=your_uri
+MONGODB_DB_NAME=trueface
+GEMINI_API_KEY=your_key
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+---
 
-## Deploy on Vercel
+## ML Detection Signals
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+| Signal | Method | Weight |
+|--------|--------|--------|
+| Deepfake Detection | ViT + SigLIP ensemble, optical flow, lip sync, face boundary | 30% |
+| Voice Authenticity | RMS energy, spectral variation, pitch, harmonic richness | 15% |
+| Reasoning Continuity | Sentence embeddings, semantic threading, follow-up coherence | 25% |
+| Response Latency | Timing patterns, too-fast detection, length-time correlation | 10% |
+| Speech Patterns | Whisper transcription, filler words, speech rate | 20% |
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+---
+
+## Team
+
+- **Verna** — ML Engine, deepfake detection, proctoring, live interview flow
+- **Bharath** — Frontend, LiveAvatar integration, dashboard
+- **Vighanesh** — Interview brain, LangGraph, voice saving
+- **Sri Ram** — RAG pipeline, Pinecone, backend
+
+---
+
+*HackDartmouth XI · April 2026*
