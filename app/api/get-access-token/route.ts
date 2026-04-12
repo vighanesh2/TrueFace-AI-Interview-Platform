@@ -15,9 +15,11 @@ export async function POST() {
         'Content-Type': 'application/json'
       },
       body: JSON.stringify({
+        // LITE = bring-your-own LLM (our FastAPI). Text-to-avatar must use LiveKit data
+        // channel (see patchLiteModeTextOverLiveKit in app/page.tsx); WS text speak throws.
         mode: "LITE",
-        avatar_id: "dd73ea75-1218-4ef3-92ce-606d5f7fbc0a"
-      }) 
+        avatar_id: "dd73ea75-1218-4ef3-92ce-606d5f7fbc0a",
+      })
     });
 
     const data = await res.json();
