@@ -729,7 +729,7 @@ export function LiveAvatarInterview() {
             isStageFullscreen && "min-h-0 h-full"
           )}
         >
-          <div className="absolute right-3 top-3 z-20 flex items-center gap-2">
+          <div className="absolute right-5 top-3 z-20 flex items-center gap-2 sm:right-6">
             {!sessionActive ? (
               <Listbox
                 value={interviewMode}
