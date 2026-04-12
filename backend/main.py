@@ -117,6 +117,7 @@ def _prepare_coding_prompt_for_client(cp: dict[str, Any]) -> dict[str, Any]:
 class StartBody(BaseModel):
     knowledge: str = Field(..., min_length=1)
     mode: Literal["full", "behavioral", "coding"] = "full"
+    session_context: Literal["practice", "live_hiring"] = "practice"
 
 
 class TurnBody(BaseModel):
@@ -180,6 +181,7 @@ def session_start(body: StartBody) -> StartResponse:
     state: InterviewState = {
         "session_id": sid,
         "interview_mode": body.mode,
+        "session_context": body.session_context,
         "knowledge": body.knowledge.strip(),
         "conversation_history": [],
         "turn_count": 0,

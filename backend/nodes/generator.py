@@ -428,11 +428,18 @@ def _evaluate_coding_submission(state: InterviewState) -> dict:
     flags = list(state.get("integrity_flags") or [])
     flag_note = ""
     if flags:
-        flag_note = (
-            "Integrity flags from the practice session (mention conversationally as coaching, not punishment; "
-            "this is a mock interview): "
-            + ", ".join(flags)
-        )
+        live = (state.get("session_context") or "practice").lower() == "live_hiring"
+        if live:
+            flag_note = (
+                "Session integrity notes (address briefly and professionally if relevant; do not accuse): "
+                + ", ".join(flags)
+            )
+        else:
+            flag_note = (
+                "Integrity flags from the practice session (mention conversationally as coaching, not punishment; "
+                "this is a mock interview): "
+                + ", ".join(flags)
+            )
     paste = "heavy_paste" in flags
     sys_add = ""
     if paste:
@@ -534,25 +541,37 @@ def roadmap_and_open_technical(state: InterviewState) -> dict:
     knowledge = state.get("knowledge", "")
     topic = state.get("current_topic", "")
     ctx = (state.get("retrieved_context") or "")[:6000]
+    live = (state.get("session_context") or "practice").lower() == "live_hiring"
+    if live:
+        human = (
+            "Intake is complete. You are Karen conducting a real hiring interview — not practice.\n"
+            "In ONE reply (no bullet lists, no syllabus or 'Part 1/2' tone):\n"
+            "Give a short professional transition, then ask exactly ONE technical question in chat aligned with "
+            f"topic '{topic}' and the role / job description. "
+            "CS fundamentals, data structures, or algorithms — not system-design depth yet.\n"
+            "Do NOT say mock, practice, or training. Keep under 160 words.\n\n"
+            f"Original signup blurb:\n{knowledge}\n\n"
+            f"Reference snippets:\n{ctx}"
+        )
+    else:
+        human = (
+            "Intake is complete. In ONE reply (no bullet lists, no syllabus tone):\n"
+            "Give a short, warm transition: they will answer exactly ONE technical question in chat, "
+            "then move straight to a timed coding exercise in the editor, then system design. "
+            "Do NOT stack multiple questions, numbered lists of questions, or 'Part A / Part B' prompts — "
+            "exactly one clear question only.\n"
+            "Then ask that single technical question aligned with topic "
+            f"'{topic}' and the target role / job description when provided. "
+            "It must be CS fundamentals, data structures, or algorithms — "
+            "not system design, scalability, or distributed architecture (save that for later). "
+            "Keep total under 160 words.\n\n"
+            f"Original signup blurb:\n{knowledge}\n\n"
+            f"Reference snippets:\n{ctx}"
+        )
     raw = llm.invoke(
         [
             SystemMessage(content=_SYSTEM),
-            HumanMessage(
-                content=(
-                    "Intake is complete. In ONE reply (no bullet lists, no syllabus tone):\n"
-                    "Give a short, warm transition: they will answer exactly ONE technical question in chat, "
-                    "then move straight to a timed coding exercise in the editor, then system design. "
-                    "Do NOT stack multiple questions, numbered lists of questions, or 'Part A / Part B' prompts — "
-                    "exactly one clear question only.\n"
-                    "Then ask that single technical question aligned with topic "
-                    f"'{topic}' and the target role / job description when provided. "
-                    "It must be CS fundamentals, data structures, or algorithms — "
-                    "not system design, scalability, or distributed architecture (save that for later). "
-                    "Keep total under 160 words.\n\n"
-                    f"Original signup blurb:\n{knowledge}\n\n"
-                    f"Reference snippets:\n{ctx}"
-                )
-            ),
+            HumanMessage(content=human),
         ]
     )
     text = text_from_llm_response(raw)
@@ -571,23 +590,34 @@ def roadmap_and_open_behavioral(state: InterviewState) -> dict:
     knowledge = state.get("knowledge", "")
     topic = state.get("current_topic", "")
     ctx = (state.get("retrieved_context") or "")[:6000]
+    live = (state.get("session_context") or "practice").lower() == "live_hiring"
+    if live:
+        human = (
+            "Intake is complete. You are Karen in a real hiring interview (behavioral focus) — not practice or coaching.\n"
+            "In ONE reply (no bullet lists): short professional transition, then ONE behavioral question suited to "
+            f"topic '{topic}' and the target role / job description. "
+            "Do NOT say mock, practice, STAR coaching setup, coding, algorithms, or system design.\n"
+            "Draw themes from the reference snippets when useful. Keep under 160 words.\n\n"
+            f"Original signup blurb:\n{knowledge}\n\n"
+            f"Reference snippets:\n{ctx}"
+        )
+    else:
+        human = (
+            "Intake is complete. This is a behavioral-only mock interview.\n"
+            "In ONE reply (no bullet lists): give a short warm transition into behavioral questions — "
+            "mention you'll use STAR or CAR structure when helpful. "
+            "Do NOT mention coding, algorithms, or system design.\n"
+            "Then ask ONE first behavioral question aligned with topic "
+            f"'{topic}' and realistic for the target role / job description when provided. "
+            "Draw themes from the reference snippets when useful. "
+            "Keep total under 160 words.\n\n"
+            f"Original signup blurb:\n{knowledge}\n\n"
+            f"Reference snippets:\n{ctx}"
+        )
     raw = llm.invoke(
         [
             SystemMessage(content=_SYSTEM),
-            HumanMessage(
-                content=(
-                    "Intake is complete. This is a behavioral-only mock interview.\n"
-                    "In ONE reply (no bullet lists): give a short warm transition into behavioral questions — "
-                    "mention you'll use STAR or CAR structure when helpful. "
-                    "Do NOT mention coding, algorithms, or system design.\n"
-                    "Then ask ONE first behavioral question aligned with topic "
-                    f"'{topic}' and realistic for the target role / job description when provided. "
-                    "Draw themes from the reference snippets when useful. "
-                    "Keep total under 160 words.\n\n"
-                    f"Original signup blurb:\n{knowledge}\n\n"
-                    f"Reference snippets:\n{ctx}"
-                )
-            ),
+            HumanMessage(content=human),
         ]
     )
     text = text_from_llm_response(raw)

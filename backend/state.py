@@ -9,6 +9,8 @@ class InterviewState(TypedDict, total=False):
     session_id: str
     # "full" = technical → system design → behavioral; "behavioral" = behavioral-only mock
     interview_mode: str
+    # "practice" (default) vs "live_hiring" — company TrueFace live link; tone + opening differ
+    session_context: str
     knowledge: str
     extracted_topics: list[str]
     skill_level: str

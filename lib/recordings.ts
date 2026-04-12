@@ -126,6 +126,24 @@ export async function getRecordingByLiveSessionForUser(
   return doc as RecordingDoc;
 }
 
+/** Candidate link: load job context when `recordingId` + `liveBumpToken` match. */
+export async function getRecordingForLiveCandidate(
+  recordingId: string,
+  liveBumpToken: string
+): Promise<RecordingDoc | null> {
+  let oid: ObjectId;
+  try {
+    oid = new ObjectId(recordingId);
+  } catch {
+    return null;
+  }
+  if (!liveBumpToken || typeof liveBumpToken !== "string") return null;
+  const db = await getDb();
+  const doc = await recordingsCollection(db).findOne({ _id: oid, liveBumpToken });
+  if (!doc) return null;
+  return doc as RecordingDoc;
+}
+
 export async function bumpRecordingMessageCountByLiveToken(
   recordingId: string,
   liveBumpToken: string,

@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-
-const ML_BASE = process.env.ML_ENGINE_URL || "http://localhost:8001";
+import { mlEngineServerBase } from "@/lib/ml-engine";
 
 type Turn = { role: "candidate" | "interviewer"; text: string };
 
@@ -41,9 +40,10 @@ export async function GET(req: NextRequest) {
     `/conversation?candidate_id=${encodeURIComponent(candidateId)}`,
   ];
 
+  const mlBase = mlEngineServerBase();
   for (const path of paths) {
     try {
-      const res = await fetch(`${ML_BASE}${path}`, {
+      const res = await fetch(`${mlBase}${path}`, {
         method: "GET",
         headers: { Accept: "application/json" },
         cache: "no-store",
@@ -60,7 +60,7 @@ export async function GET(req: NextRequest) {
   }
 
   try {
-    const res = await fetch(`${ML_BASE}/session/report?candidate_id=${encodeURIComponent(candidateId)}&candidate_name=Candidate`, {
+    const res = await fetch(`${mlBase}/session/report?candidate_id=${encodeURIComponent(candidateId)}&candidate_name=Candidate`, {
       method: "POST",
       headers: { Accept: "application/json" },
       cache: "no-store",

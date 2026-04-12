@@ -7,8 +7,7 @@ import {
   lightDescription,
   lightSecondaryButton,
 } from "@/lib/dashboard-light-theme";
-
-const ML_ENGINE_URL = "http://localhost:8001";
+import { ML_ENGINE_CLIENT_BASE, mlCandidateIdForLiveSession } from "@/lib/ml-engine";
 
 interface SignalData {
   score: number;
@@ -116,6 +115,9 @@ export default function MonitorPage({ params }: { params: Promise<{ sessionId: s
     [sessionId]
   );
 
+  /** Must match `candidateId` in `LiveInterviewCandidate` for this session. */
+  const mlCandidateId = useMemo(() => mlCandidateIdForLiveSession(sessionId), [sessionId]);
+
   useEffect(() => {
     let cancelled = false;
     const loadRecording = async () => {
@@ -146,7 +148,7 @@ export default function MonitorPage({ params }: { params: Promise<{ sessionId: s
     const fetchReport = async () => {
       try {
         const res = await fetch(
-          `${ML_ENGINE_URL}/session/report?candidate_id=${encodeURIComponent(sessionId)}&candidate_name=Candidate`,
+          `${ML_ENGINE_CLIENT_BASE}/session/report?candidate_id=${encodeURIComponent(mlCandidateId)}&candidate_name=Candidate`,
           { method: "POST" }
         );
         if (res.ok) {
@@ -158,7 +160,9 @@ export default function MonitorPage({ params }: { params: Promise<{ sessionId: s
           setAuthenticityTrail((prev) => [...prev.slice(-39), pct]);
         }
 
-        const procRes = await fetch(`${ML_ENGINE_URL}/session/proctoring/${encodeURIComponent(sessionId)}`);
+        const procRes = await fetch(
+          `${ML_ENGINE_CLIENT_BASE}/session/proctoring/${encodeURIComponent(mlCandidateId)}`
+        );
         if (procRes.ok) {
           const procData = (await procRes.json()) as { proctoring_events?: ProctoringEvent[] };
           if (procData.proctoring_events) {
@@ -167,7 +171,7 @@ export default function MonitorPage({ params }: { params: Promise<{ sessionId: s
         }
 
         const convRes = await fetch(
-          `/api/monitor/conversation?candidateId=${encodeURIComponent(sessionId)}`,
+          `/api/monitor/conversation?candidateId=${encodeURIComponent(mlCandidateId)}`,
           { credentials: "same-origin" }
         );
         if (convRes.ok) {
@@ -184,7 +188,7 @@ export default function MonitorPage({ params }: { params: Promise<{ sessionId: s
     void fetchReport();
     const interval = window.setInterval(() => void fetchReport(), 3000);
     return () => window.clearInterval(interval);
-  }, [sessionId]);
+  }, [mlCandidateId]);
 
   const authenticityPct = report ? Math.round((1 - report.final_score) * 100) : null;
 
@@ -565,7 +569,7 @@ export default function MonitorPage({ params }: { params: Promise<{ sessionId: s
                   When the candidate opens their link and the ML engine starts, scores and signals will show here
                   automatically.
                 </p>
-                <p className="mt-4 font-mono text-xs text-neutral-500 dark:text-neutral-500">{sessionId}</p>
+                <p className="mt-4 font-mono text-xs text-neutral-500 dark:text-neutral-500">{mlCandidateId}</p>
               </div>
             )}
           </div>
