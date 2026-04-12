@@ -8,6 +8,7 @@ from typing import Any
 
 from langchain_core.messages import HumanMessage, SystemMessage
 
+from ..config import CODING_TITLE_STRICT
 from ..llm_factory import get_chat, text_from_llm_response
 from ..state import InterviewState
 
@@ -169,7 +170,10 @@ def _enrich_coding_problem(state: InterviewState, problem: dict[str, Any]) -> di
                     "Recent interview transcript (anchor the coding task here):\n"
                     f"{tail}\n\n"
                     "Draft JSON from a previous attempt (fix or replace):\n"
-                    f"{draft}\n"
+                    f"{draft}\n\n"
+                    "If the draft is generic or only 'reverse string' / palindrome / FizzBuzz without the transcript "
+                    "asking for that, replace with a richer problem that matches the transcript and topic. "
+                    "Title and description must name the actual task."
                 )
             ),
         ]
@@ -208,11 +212,139 @@ def _last_user_content(state: InterviewState) -> str:
     return ""
 
 
+_GENERIC_CODING_TITLES = frozenset(
+    {
+        "coding exercise",
+        "coding problem",
+        "algorithm problem",
+        "data structures problem",
+        "practice problem",
+        "leetcode problem",
+        "mock problem",
+        "dsa problem",
+        "interview question",
+        "interview coding question",
+        "problem",
+        "task",
+        "exercise",
+        "algorithm task",
+        "coding task",
+        "dsa task",
+    }
+)
+
+
+def _is_coding_title_acceptable(title: str) -> bool:
+    """Heuristic: real problem names, not parser defaults or filler."""
+    t = title.strip()
+    if len(t) < 4 or len(t) > 120:
+        return False
+    tl = t.lower()
+    if tl in _GENERIC_CODING_TITLES:
+        return False
+    if tl.startswith("coding exercise"):
+        return False
+    return True
+
+
+def _parse_title_repair_response(raw: str) -> dict[str, str]:
+    blob = _extract_json_object(raw) or _JSON_FENCE.sub("", raw.strip()).strip()
+    try:
+        data = json.loads(blob)
+    except (json.JSONDecodeError, TypeError):
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    title = str(data.get("title") or "").strip()
+    spoken = str(data.get("spoken_summary") or "").strip()
+    out: dict[str, str] = {}
+    if title:
+        out["title"] = title
+    if spoken:
+        out["spoken_summary"] = spoken
+    return out
+
+
+def _repair_coding_title(state: InterviewState, problem: dict[str, Any]) -> dict[str, str]:
+    """Single follow-up call: concrete title + spoken line. Returns {} on failure."""
+    llm = get_chat()
+    tail = _conversation_tail(state, 10)
+    snapshot = json.dumps(
+        {
+            "title": problem.get("title"),
+            "description": (problem.get("description") or "")[:2000],
+            "test_cases": problem.get("test_cases"),
+        },
+        indent=2,
+    )[:8000]
+    raw = llm.invoke(
+        [
+            SystemMessage(
+                content=(
+                    "Reply with ONLY valid JSON, no markdown. Keys: title (string), spoken_summary (string).\n"
+                    "title must be a specific interview-style problem name (2–10 words), e.g. "
+                    "'Two Sum', 'Longest Increasing Subsequence', 'Course Schedule' — never generic labels like "
+                    "'Coding exercise', 'Algorithm problem', or 'Practice task'.\n"
+                    "spoken_summary: under 50 words, natural speech introducing that exact problem to the candidate."
+                )
+            ),
+            HumanMessage(
+                content=(
+                    "Recent interview transcript (problem must match this context):\n"
+                    f"{tail}\n\n"
+                    "Current problem snapshot (fix only the title/spoken to be specific and accurate):\n"
+                    f"{snapshot}"
+                )
+            ),
+        ]
+    )
+    text = text_from_llm_response(raw)
+    return _parse_title_repair_response(text)
+
+
+def _ensure_coding_title_quality(state: InterviewState, problem: dict[str, Any]) -> dict[str, Any]:
+    """
+    If title looks generic, run at most one repair pass. On any failure, return original problem unchanged.
+    """
+    if not CODING_TITLE_STRICT:
+        return problem
+    title = str(problem.get("title") or "").strip()
+    if _is_coding_title_acceptable(title):
+        return problem
+    try:
+        patch = _repair_coding_title(state, problem)
+    except Exception:
+        return problem
+    new_title = patch.get("title", "").strip()
+    if not new_title or not _is_coding_title_acceptable(new_title):
+        return problem
+    out = dict(problem)
+    out["title"] = new_title
+    if patch.get("spoken_summary"):
+        out["spoken_summary"] = patch["spoken_summary"]
+    return out
+
+
+def _coding_problem_variety_hint(state: InterviewState) -> str:
+    """Nudge the model away from always picking 'reverse string' while staying transcript-first."""
+    turn = int(state.get("turn_count") or 0)
+    families = (
+        "hash map / frequency counting on arrays or strings",
+        "two pointers or sliding window on a linear structure",
+        "stack-based parsing, bracket matching, or similar",
+        "intervals, merging ranges, or greedy scheduling",
+        "BFS/DFS on a grid or small graph, or tree traversal",
+        "prefix sums, running aggregates, or subarray logic",
+    )
+    return families[turn % len(families)]
+
+
 def _emit_coding_problem(state: InterviewState) -> dict:
     llm = get_chat()
     topic = state.get("current_topic", "")
     ctx = (state.get("retrieved_context") or "")[:6000]
     tail = _conversation_tail(state, 12)
+    variety = _coding_problem_variety_hint(state)
     raw = llm.invoke(
         [
             SystemMessage(
@@ -223,7 +355,13 @@ def _emit_coding_problem(state: InterviewState) -> dict:
                     "starter_code (object with keys python, javascript, java, cpp, go — each a starter string), "
                     "test_cases (array of 3 to 5 objects: {input, expected_output} as short strings for automated checks), "
                     "time_limit_seconds (number, default 600), "
-                    "spoken_summary (under 50 words: what you will say aloud to introduce the problem)."
+                    "spoken_summary (under 50 words: what you will say aloud to introduce the problem).\n"
+                    "Quality rules: The title must name the real task (e.g. 'Two Sum', 'Merge Overlapping Intervals'). "
+                    "The description must state the full problem—not 'use the editor' boilerplate.\n"
+                    "Do NOT default to these clichés unless the conversation literally asked for that exact task: "
+                    "reverse a string, palindrome check, FizzBuzz, naive Fibonacci nth, or 'implement strlen'. "
+                    "If the verbal question was broad, pick a standard interview-style problem that fits the topic "
+                    "and transcript, not the shortest string toy problem."
                 )
             ),
             HumanMessage(
@@ -231,6 +369,8 @@ def _emit_coding_problem(state: InterviewState) -> dict:
                     f"Topic focus: {topic}.\nReference snippets:\n{ctx}\n\n"
                     "Recent interview conversation (your coding task MUST follow the last technical question):\n"
                     f"{tail}\n\n"
+                    f"Variety nudge (use ONLY if it fits the transcript and topic; transcript wins): consider "
+                    f"{variety}.\n\n"
                     "Design one concise coding problem (data structures / algorithms) that the candidate can implement "
                     "in code — align with what they were just asked verbally. "
                     "Include at least 3 test_cases with concrete input and expected_output strings. "
@@ -242,6 +382,7 @@ def _emit_coding_problem(state: InterviewState) -> dict:
     text = text_from_llm_response(raw)
     problem = _parse_problem_json(text)
     problem = _enrich_coding_problem(state, problem)
+    problem = _ensure_coding_title_quality(state, problem)
     hist = list(state.get("conversation_history") or [])
     spoken = problem["spoken_summary"]
     hist.append({"role": "assistant", "content": spoken})
