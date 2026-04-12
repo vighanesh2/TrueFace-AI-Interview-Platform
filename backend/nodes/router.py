@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 from ..state import InterviewState
 
 _PHASE_ORDER = ["technical", "system_design", "behavioral", "wrap_up"]
@@ -24,8 +26,41 @@ def advance_cursor(state: InterviewState) -> dict:
     if state.get("interview_done"):
         return {}
 
-    agenda = state.get("topic_agenda") or {}
+    if state.get("awaiting_explanation"):
+        hist = state.get("conversation_history") or []
+        last_u = ""
+        for m in reversed(hist):
+            if m.get("role") == "user":
+                last_u = m.get("content") or ""
+                break
+        if "[Code submission]" not in last_u:
+            out: dict[str, Any] = {"awaiting_explanation": False, "follow_up_depth": 0}
+            deferred_raw = state.get("deferred_next_topic")
+            if isinstance(deferred_raw, str) and deferred_raw:
+                out["current_topic"] = deferred_raw
+                out["deferred_next_topic"] = None
+            elif deferred_raw == "":
+                agenda = state.get("topic_agenda") or {}
+                sd_topics = list(agenda.get("system_design") or [])
+                out["phase"] = "system_design"
+                out["current_topic"] = sd_topics[0] if sd_topics else "api_and_scaling"
+                out["follow_up_depth"] = 0
+                out["current_part_index"] = 2
+                out["deferred_next_topic"] = None
+            return out
+
     phase = state.get("phase") or "technical"
+    if phase == "technical" and (state.get("input_mode") or "chat") == "code":
+        hist = state.get("conversation_history") or []
+        last_u = ""
+        for m in reversed(hist):
+            if m.get("role") == "user":
+                last_u = m.get("content") or ""
+                break
+        if "[Code submission]" in last_u and state.get("coding_prompt"):
+            return {}
+
+    agenda = state.get("topic_agenda") or {}
     topic = state.get("current_topic") or ""
     depth = int(state.get("follow_up_depth") or 0)
     quality = state.get("last_answer_quality") or "adequate"
@@ -51,10 +86,36 @@ def advance_cursor(state: InterviewState) -> dict:
 
     nxt = _next_in_list(phase_topics, topic)
     if nxt:
+        if (
+            phase == "technical"
+            and int(state.get("coding_turns_given") or 0) < 1
+            and (state.get("input_mode") or "chat") == "chat"
+        ):
+            return {
+                "input_mode": "code",
+                "follow_up_depth": 0,
+                "current_part_index": _PART_INDEX.get(phase, 1),
+                "deferred_next_topic": nxt,
+            }
         return {
             "current_topic": nxt,
             "follow_up_depth": 0,
             "current_part_index": _PART_INDEX.get(phase, 1),
+        }
+
+    if (
+        phase == "technical"
+        and phase_topics
+        and topic == phase_topics[-1]
+        and int(state.get("coding_turns_given") or 0) < 1
+        and (state.get("input_mode") or "chat") == "chat"
+        and int(state.get("technical_user_turns") or 0) >= 2
+    ):
+        return {
+            "input_mode": "code",
+            "follow_up_depth": 0,
+            "current_part_index": _PART_INDEX.get(phase, 1),
+            "deferred_next_topic": "",
         }
 
     if phase == "technical":
