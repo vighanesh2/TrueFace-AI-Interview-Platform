@@ -2,11 +2,6 @@
 
 import {
   Button,
-  Description,
-  Dialog,
-  DialogBackdrop,
-  DialogPanel,
-  DialogTitle,
   Listbox,
   ListboxButton,
   ListboxOption,
@@ -22,13 +17,36 @@ import { lightPrimaryButton } from "@/lib/dashboard-light-theme";
 import { buildInterviewKnowledge } from "@/lib/interview-context";
 import type { LiveavatarInterviewerGender } from "@/lib/liveavatar-interviewers";
 import { BodyLanguagePipHud, useBodyLanguageAnalysis } from "@/components/body-language-tracker";
+import {
+  CodeEditorPanel,
+  type KeystrokeSummary,
+  type LangId,
+} from "@/components/code-editor";
+import { CodingProblemPanel } from "@/components/coding-problem-panel";
+import { useCodingInterviewBrain } from "@/hooks/use-coding-interview-brain";
+import { interviewApiBase } from "@/lib/coding-interview-api";
 
 const PIP_WIDTH_MIN = 120;
 const PIP_WIDTH_MAX = 480;
 const PIP_WIDTH_STORAGE = "trueface-pip-width";
+const PIP_TRANSLATE_STORAGE = "trueface-pip-translate";
+const TOOLBAR_TRANSLATE_STORAGE = "trueface-toolbar-translate";
 
 const prejoinFieldClass =
   "w-full rounded-lg border border-white/15 bg-neutral-900/90 px-3 py-2 text-sm text-neutral-100 placeholder:text-neutral-500 focus:border-white/35 focus:outline-none focus:ring-1 focus:ring-white/20";
+
+const CODING_INTEGRITY_LABELS: Record<string, string> = {
+  heavy_paste:
+    "A large block of text was inserted at once — many proctored platforms flag sudden large pastes.",
+  frequent_tab_away:
+    "The tab was switched away from several times — real assessments often log focus changes.",
+  long_idle: "There was a long stretch with no typing — timed sessions may flag extended idle periods.",
+  timed_out: "The coding timer ran out before submit (your attempt was still recorded).",
+};
+
+function codingIntegrityLines(flags: string[]): string[] {
+  return flags.map((f) => CODING_INTEGRITY_LABELS[f] ?? f);
+}
 
 function getFullscreenElement(): Element | null {
   if (typeof document === "undefined") return null;
@@ -173,7 +191,6 @@ function IconFullscreenExit({ className }: { className?: string }) {
   );
 }
 
-<<<<<<< Updated upstream
 function IconRecord({ className }: { className?: string }) {
   return (
     <svg className={className} width="22" height="22" viewBox="0 0 24 24" fill="none" aria-hidden>
@@ -263,7 +280,6 @@ function blobUploadContentType(raw: string): string {
   return "video/webm";
 }
 
-=======
 function pickMeetingRecorderMime(): string {
   const candidates = ["video/webm;codecs=vp8,opus", "video/webm;codecs=vp9,opus", "video/webm"];
   for (const m of candidates) {
@@ -272,19 +288,91 @@ function pickMeetingRecorderMime(): string {
   return "video/webm";
 }
 
-function triggerWebmDownload(blob: Blob, hintId: string) {
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = `trueface-mock-${hintId.slice(-10)}.webm`;
-  a.rel = "noopener";
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  URL.revokeObjectURL(url);
+/**
+ * Meeting record stream from captureStream() has interviewer audio but not the user's mic.
+ * Mix both into one track so replays include the candidate's voice (MediaRecorder often muxes a single audio track).
+ */
+async function addUserMicToMeetingStream(baseStream: MediaStream): Promise<{
+  stream: MediaStream;
+  release: () => void;
+}> {
+  const videoTracks = baseStream.getVideoTracks();
+  const origAudio = baseStream.getAudioTracks();
+
+  let micStream: MediaStream | null = null;
+  try {
+    micStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+  } catch {
+    /* optional — keep avatar-only if denied */
+  }
+  const micTrack = micStream?.getAudioTracks()[0] ?? null;
+
+  const stopMic = () => {
+    micStream?.getTracks().forEach((t) => t.stop());
+    micStream = null;
+  };
+
+  if (!micTrack) {
+    return { stream: baseStream, release: stopMic };
+  }
+
+  if (origAudio.length === 0) {
+    return {
+      stream: new MediaStream([...videoTracks, micTrack]),
+      release: stopMic,
+    };
+  }
+
+  const Ctx =
+    typeof AudioContext !== "undefined"
+      ? AudioContext
+      : (typeof window !== "undefined"
+          ? (window as typeof window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext
+          : undefined);
+  if (!Ctx) {
+    return {
+      stream: new MediaStream([...videoTracks, micTrack]),
+      release: stopMic,
+    };
+  }
+
+  const ctx = new Ctx();
+  await ctx.resume().catch(() => {});
+  const dest = ctx.createMediaStreamDestination();
+  let ok = false;
+  for (const t of origAudio) {
+    try {
+      ctx.createMediaStreamSource(new MediaStream([t])).connect(dest);
+      ok = true;
+    } catch {
+      /* skip */
+    }
+  }
+  try {
+    ctx.createMediaStreamSource(new MediaStream([micTrack])).connect(dest);
+    ok = true;
+  } catch {
+    stopMic();
+    void ctx.close();
+    return { stream: baseStream, release: () => {} };
+  }
+
+  const mixedTrack = dest.stream.getAudioTracks()[0];
+  if (!mixedTrack || !ok) {
+    stopMic();
+    void ctx.close();
+    return { stream: baseStream, release: () => {} };
+  }
+
+  return {
+    stream: new MediaStream([...videoTracks, mixedTrack]),
+    release: () => {
+      void ctx.close();
+      stopMic();
+    },
+  };
 }
 
->>>>>>> Stashed changes
 function ZoomControlButton({
   active,
   danger,
@@ -366,9 +454,23 @@ export function LiveAvatarInterview() {
   const userStreamRef = useRef<MediaStream | null>(null);
   const stageContainerRef = useRef<HTMLDivElement | null>(null);
   const pipResizeDragRef = useRef<{ startX: number; startW: number } | null>(null);
+  const pipMoveDragRef = useRef<{ startX: number; startY: number; tx: number; ty: number } | null>(null);
+  const toolbarMoveDragRef = useRef<{ startX: number; startY: number; tx: number; ty: number } | null>(null);
   const answerInputRef = useRef<HTMLInputElement | null>(null);
 
-<<<<<<< Updated upstream
+  const recordingIdRef = useRef<string | null>(null);
+  const recordingSavedRef = useRef(false);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const recordedChunksRef = useRef<BlobPart[]>([]);
+  const recordedMimeRef = useRef("");
+  const recorderMicStreamRef = useRef<MediaStream | null>(null);
+  const sessionWebmRecorderStartedRef = useRef(false);
+
+
+  const codingBrain = useCodingInterviewBrain();
+  const codingBrainRef = useRef(codingBrain);
+  codingBrainRef.current = codingBrain;
+
   const meetingComposeRafRef = useRef<number | null>(null);
   const meetingRecordStreamRef = useRef<MediaStream | null>(null);
   const meetingRecorderRef = useRef<MediaRecorder | null>(null);
@@ -376,22 +478,14 @@ export function LiveAvatarInterview() {
   const meetingRecordingIdRef = useRef<string | null>(null);
   const meetingBlobPathRef = useRef<string | null>(null);
   const meetingStopUploadPromiseRef = useRef<Promise<void> | null>(null);
+  const meetingRecordMixReleaseRef = useRef<(() => void) | null>(null);
 
   const [meetingRecordState, setMeetingRecordState] = useState<"idle" | "recording" | "uploading">("idle");
-=======
-  const recordingIdRef = useRef<string | null>(null);
-  const recordingSavedRef = useRef(false);
-  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
-  const recordedChunksRef = useRef<BlobPart[]>([]);
-  const recordedMimeRef = useRef("");
-  const recorderMicStreamRef = useRef<MediaStream | null>(null);
-  const meetingRecorderStartedRef = useRef(false);
-
-  const [leaveDialogOpen, setLeaveDialogOpen] = useState(false);
-  const [saveRecordingBusy, setSaveRecordingBusy] = useState(false);
->>>>>>> Stashed changes
 
   const [pipWidth, setPipWidthState] = useState(200);
+  const [pipTranslate, setPipTranslate] = useState({ x: 0, y: 0 });
+  const [toolbarTranslate, setToolbarTranslate] = useState({ x: 0, y: 0 });
+
   useEffect(() => {
     try {
       const raw = localStorage.getItem(PIP_WIDTH_STORAGE);
@@ -399,6 +493,20 @@ export function LiveAvatarInterview() {
         const n = Number.parseInt(raw, 10);
         if (!Number.isNaN(n)) {
           setPipWidthState(Math.min(PIP_WIDTH_MAX, Math.max(PIP_WIDTH_MIN, n)));
+        }
+      }
+      const pt = localStorage.getItem(PIP_TRANSLATE_STORAGE);
+      if (pt) {
+        const j = JSON.parse(pt) as { x?: number; y?: number };
+        if (typeof j.x === "number" && typeof j.y === "number") {
+          setPipTranslate({ x: j.x, y: j.y });
+        }
+      }
+      const tt = localStorage.getItem(TOOLBAR_TRANSLATE_STORAGE);
+      if (tt) {
+        const j = JSON.parse(tt) as { x?: number; y?: number };
+        if (typeof j.x === "number" && typeof j.y === "number") {
+          setToolbarTranslate({ x: j.x, y: j.y });
         }
       }
     } catch {
@@ -440,6 +548,36 @@ export function LiveAvatarInterview() {
     } catch {
       /* ignore */
     }
+  }, []);
+
+  const clampPipTranslate = useCallback(
+    (x: number, y: number) => {
+      const shell = stageContainerRef.current;
+      if (!shell) return { x, y };
+      const rect = shell.getBoundingClientRect();
+      const w = pipWidth;
+      const h = (w * 9) / 16;
+      const margin = 8;
+      const bottomChrome = 96;
+      const minX = -(rect.width - w - margin * 2);
+      const minY = -(rect.height - h - margin - bottomChrome);
+      return {
+        x: Math.min(0, Math.max(minX, x)),
+        y: Math.min(0, Math.max(minY, y)),
+      };
+    },
+    [pipWidth]
+  );
+
+  const clampToolbarTranslate = useCallback((x: number, y: number) => {
+    const shell = stageContainerRef.current;
+    if (!shell) return { x, y };
+    const rect = shell.getBoundingClientRect();
+    const margin = 8;
+    return {
+      x: Math.min(rect.width / 2 - margin, Math.max(-rect.width / 2 + margin, x)),
+      y: Math.min(-margin, Math.max(-rect.height + 80, y)),
+    };
   }, []);
 
   useEffect(() => {
@@ -672,6 +810,11 @@ export function LiveAvatarInterview() {
     return { recordingId: data.id, blobPath: data.meetingBlobPath };
   }, [interviewMode]);
 
+  const releaseMeetingRecordMix = useCallback(() => {
+    meetingRecordMixReleaseRef.current?.();
+    meetingRecordMixReleaseRef.current = null;
+  }, []);
+
   const stopMeetingRecordingAndUpload = useCallback(async () => {
     if (meetingStopUploadPromiseRef.current) {
       await meetingStopUploadPromiseRef.current;
@@ -682,6 +825,7 @@ export function LiveAvatarInterview() {
       const recorder = meetingRecorderRef.current;
       if (!recorder || recorder.state === "inactive") {
         stopCompositeDraw(meetingComposeRafRef);
+        releaseMeetingRecordMix();
         meetingRecordStreamRef.current?.getTracks().forEach((t) => t.stop());
         meetingRecordStreamRef.current = null;
         meetingRecorderRef.current = null;
@@ -703,6 +847,7 @@ export function LiveAvatarInterview() {
       });
 
       stopCompositeDraw(meetingComposeRafRef);
+      releaseMeetingRecordMix();
       const s = meetingRecordStreamRef.current;
       if (s) {
         s.getTracks().forEach((t) => t.stop());
@@ -752,7 +897,7 @@ export function LiveAvatarInterview() {
     } finally {
       meetingStopUploadPromiseRef.current = null;
     }
-  }, []);
+  }, [releaseMeetingRecordMix]);
 
   const startMeetingRecording = useCallback(async () => {
     if (!sessionActive || meetingRecordState !== "idle" || meetingRecorderRef.current) return;
@@ -764,23 +909,37 @@ export function LiveAvatarInterview() {
 
     const includeCamera = cameraOn;
     const userEl = userVideoRef.current;
-    const stream = buildMeetingRecordStream(avatarEl, userEl, includeCamera, meetingComposeRafRef);
-    if (!stream || stream.getTracks().length === 0) {
+    const baseStream = buildMeetingRecordStream(avatarEl, userEl, includeCamera, meetingComposeRafRef);
+    if (!baseStream || baseStream.getTracks().length === 0) {
       alert("Recording is not supported in this browser. Try Chrome or Edge.");
       return;
     }
 
-    meetingRecordStreamRef.current = stream;
+    let finalStream: MediaStream;
+    try {
+      const mixed = await addUserMicToMeetingStream(baseStream);
+      meetingRecordMixReleaseRef.current = mixed.release;
+      finalStream = mixed.stream;
+    } catch (e) {
+      console.error(e);
+      stopCompositeDraw(meetingComposeRafRef);
+      baseStream.getTracks().forEach((t) => t.stop());
+      alert("Could not set up microphone for recording. Check permissions and try again.");
+      return;
+    }
+
+    meetingRecordStreamRef.current = finalStream;
     meetingChunksRef.current = [];
 
     const mime = pickRecorderMime();
     let recorder: MediaRecorder;
     try {
-      recorder = mime ? new MediaRecorder(stream, { mimeType: mime }) : new MediaRecorder(stream);
+      recorder = mime ? new MediaRecorder(finalStream, { mimeType: mime }) : new MediaRecorder(finalStream);
     } catch (e) {
       console.error(e);
+      releaseMeetingRecordMix();
       stopCompositeDraw(meetingComposeRafRef);
-      stream.getTracks().forEach((t) => t.stop());
+      finalStream.getTracks().forEach((t) => t.stop());
       meetingRecordStreamRef.current = null;
       alert("Could not start recording.");
       return;
@@ -796,13 +955,14 @@ export function LiveAvatarInterview() {
       setMeetingRecordState("recording");
     } catch (e) {
       console.error(e);
+      releaseMeetingRecordMix();
       stopCompositeDraw(meetingComposeRafRef);
-      stream.getTracks().forEach((t) => t.stop());
+      finalStream.getTracks().forEach((t) => t.stop());
       meetingRecordStreamRef.current = null;
       meetingRecorderRef.current = null;
       alert("Could not start recording.");
     }
-  }, [sessionActive, meetingRecordState, cameraOn, ensureMeetingRecording]);
+  }, [sessionActive, meetingRecordState, cameraOn, ensureMeetingRecording, releaseMeetingRecordMix]);
 
   useEffect(() => {
     if (!cameraOn) return;
@@ -813,11 +973,6 @@ export function LiveAvatarInterview() {
     void el.play().catch(() => {});
   }, [cameraOn]);
 
-<<<<<<< Updated upstream
-  const stopAvatarSession = async () => {
-    await stopMeetingRecordingAndUpload();
-
-=======
   const discardLiveRecording = useCallback(async () => {
     const id = recordingIdRef.current;
     recordingIdRef.current = null;
@@ -829,8 +984,8 @@ export function LiveAvatarInterview() {
     }
   }, []);
 
-  const stopMeetingRecording = useCallback((wantBlob: boolean): Promise<Blob | null> => {
-    meetingRecorderStartedRef.current = false;
+  const stopSessionWebmRecording = useCallback((wantBlob: boolean): Promise<Blob | null> => {
+    sessionWebmRecorderStartedRef.current = false;
     const mr = mediaRecorderRef.current;
     mediaRecorderRef.current = null;
     const mic = recorderMicStreamRef.current;
@@ -862,8 +1017,8 @@ export function LiveAvatarInterview() {
     });
   }, []);
 
-  const startMeetingRecording = useCallback(async (videoEl: HTMLVideoElement) => {
-    if (meetingRecorderStartedRef.current || typeof MediaRecorder === "undefined") return;
+  const startSessionWebmRecording = useCallback(async (videoEl: HTMLVideoElement) => {
+    if (sessionWebmRecorderStartedRef.current || typeof MediaRecorder === "undefined") return;
     recordedChunksRef.current = [];
     const v = videoEl as HTMLVideoElement & { captureStream?: (fps?: number) => MediaStream };
     const cap = v.captureStream?.(24);
@@ -887,7 +1042,7 @@ export function LiveAvatarInterview() {
       };
       mr.start(1000);
       mediaRecorderRef.current = mr;
-      meetingRecorderStartedRef.current = true;
+      sessionWebmRecorderStartedRef.current = true;
     } catch (e) {
       console.error("MediaRecorder start:", e);
       recorderMicStreamRef.current?.getTracks().forEach((t) => t.stop());
@@ -895,8 +1050,27 @@ export function LiveAvatarInterview() {
     }
   }, []);
 
+  const discardCompositeMeetingRecorder = useCallback(() => {
+    const rec = meetingRecorderRef.current;
+    if (rec && rec.state !== "inactive") {
+      try {
+        rec.stop();
+      } catch {
+        /* ignore */
+      }
+    }
+    stopCompositeDraw(meetingComposeRafRef);
+    releaseMeetingRecordMix();
+    meetingRecordStreamRef.current?.getTracks().forEach((t) => t.stop());
+    meetingRecordStreamRef.current = null;
+    meetingRecorderRef.current = null;
+    meetingChunksRef.current = [];
+    setMeetingRecordState("idle");
+  }, [releaseMeetingRecordMix]);
+
   const stopAvatarSession = async (opts?: { skipRecordingDiscard?: boolean }) => {
->>>>>>> Stashed changes
+    discardCompositeMeetingRecorder();
+
     const shell = stageContainerRef.current;
     if (shell && getFullscreenElement() === shell) {
       try {
@@ -906,7 +1080,7 @@ export function LiveAvatarInterview() {
       }
     }
 
-    void stopMeetingRecording(false);
+    await stopSessionWebmRecording(false);
 
     if (!opts?.skipRecordingDiscard && recordingIdRef.current && !recordingSavedRef.current) {
       await discardLiveRecording();
@@ -928,10 +1102,10 @@ export function LiveAvatarInterview() {
     setIsChatting(false);
     setInterviewerSubtitle("");
     brainSessionIdRef.current = null;
+    codingBrain.reset();
     stopUserCamera();
 
     stopSpeechRecognitionUserIntent();
-    setLeaveDialogOpen(false);
   };
 
   useEffect(() => {
@@ -941,8 +1115,8 @@ export function LiveAvatarInterview() {
 
     let cancelled = false;
     const tryStart = () => {
-      if (cancelled || meetingRecorderStartedRef.current) return;
-      void startMeetingRecording(video);
+      if (cancelled || sessionWebmRecorderStartedRef.current) return;
+      void startSessionWebmRecording(video);
     };
 
     video.addEventListener("playing", tryStart, { once: true });
@@ -954,7 +1128,7 @@ export function LiveAvatarInterview() {
       cancelled = true;
       video.removeEventListener("playing", tryStart);
     };
-  }, [sessionActive, startMeetingRecording]);
+  }, [sessionActive, startSessionWebmRecording]);
 
   const startAvatarSession = async () => {
     if (isAvatarStarting || sessionActive) return;
@@ -975,13 +1149,11 @@ export function LiveAvatarInterview() {
     setIsAvatarStarting(true);
     setMessages([]);
     brainSessionIdRef.current = null;
-<<<<<<< Updated upstream
-    meetingRecordingIdRef.current = null;
-    meetingBlobPathRef.current = null;
-=======
+    codingBrain.reset();
     recordingIdRef.current = null;
     recordingSavedRef.current = false;
->>>>>>> Stashed changes
+    meetingRecordingIdRef.current = null;
+    meetingBlobPathRef.current = null;
 
     const modeAtStart = interviewMode;
     const genderAtStart = interviewerGender;
@@ -1070,6 +1242,30 @@ export function LiveAvatarInterview() {
               );
             }
           })();
+        } else {
+          void (async () => {
+            const started = await codingBrainRef.current.startBrain(knowledge);
+            if (!started.ok) {
+              console.error("Coding interview start:", started.error);
+              alert(
+                `Could not start the technical (coding) interview engine at ${interviewApiBase()}. Is the backend running?\n\n${started.error}`
+              );
+              return;
+            }
+            const opening = started.opening.trim();
+            setMessages(opening ? [{ role: "ai", text: opening }] : []);
+            if (opening) {
+              setInterviewerSubtitle(opening);
+              const a = avatarRef.current;
+              if (a) {
+                try {
+                  await a.repeat(opening);
+                } catch (sdkError) {
+                  console.error("Avatar repeat failed:", sdkError);
+                }
+              }
+            }
+          })();
         }
       });
 
@@ -1117,29 +1313,27 @@ export function LiveAvatarInterview() {
         }
         aiResponse = chatData.response;
       } else {
-        const formattedHistory = currentMessages.map((msg) => ({
-          role: msg.role === "user" ? "user" : "model",
-          parts: [{ text: msg.text }],
-        }));
-
-        const chatRes = await fetch("/api/chat", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            message: userText,
-            history: formattedHistory,
-            interviewType: "technical",
-            interviewContext: interviewContextRef.current,
-          }),
-        });
-
-        const chatData = (await chatRes.json()) as { response?: string; error?: string };
-
-        if (!chatRes.ok || !chatData.response) {
-          throw new Error(chatData.error || "Gemini did not respond");
+        const turn = await codingBrain.sendChatTurn(userText);
+        if (!turn.ok) {
+          setMessages((prev) => [...prev, { role: "ai", text: `Error: ${turn.error}` }]);
+          return;
         }
-
-        aiResponse = chatData.response;
+        aiResponse = turn.aiResponse;
+        const displayText = turn.done
+          ? `${aiResponse}\n\n(Interview complete.)`
+          : turn.suppressAvatar
+            ? (aiResponse.trim() || "Tests failed — see the panel below the editor.")
+            : aiResponse;
+        setMessages((prev) => [...prev, { role: "ai", text: displayText }]);
+        setInterviewerSubtitle(aiResponse);
+        if (aiResponse.trim() && !turn.suppressAvatar && avatarRef.current) {
+          try {
+            await avatarRef.current.repeat(aiResponse);
+          } catch (sdkError) {
+            console.error("Avatar repeat failed:", sdkError);
+          }
+        }
+        return;
       }
       setMessages((prev) => [...prev, { role: "ai", text: aiResponse }]);
       setInterviewerSubtitle(aiResponse);
@@ -1155,6 +1349,71 @@ export function LiveAvatarInterview() {
       console.error("Chat error:", error);
       setMessages(messages);
       alert("Something went wrong. Wait a moment and try again.");
+    } finally {
+      setIsChatting(false);
+    }
+  };
+
+  const sendCodeSubmission = async (code: string, language: LangId, summary: KeystrokeSummary) => {
+    if (interviewMode !== "technical" || isChatting || !codingBrain.brainReady) return;
+    setIsChatting(true);
+    setMessages((prev) => [...prev, { role: "user", text: `[Submitted ${language} code]` }]);
+    try {
+      const turn = await codingBrain.sendCodeTurn(code, language, summary);
+      if (!turn.ok) {
+        setMessages((prev) => [...prev, { role: "ai", text: `Error: ${turn.error}` }]);
+        return;
+      }
+      const { aiResponse, done, suppressAvatar } = turn;
+      const displayText = done
+        ? `${aiResponse}\n\n(Interview complete.)`
+        : suppressAvatar
+          ? (aiResponse.trim() || "Tests failed — see results below the editor.")
+          : aiResponse;
+      setMessages((prev) => [...prev, { role: "ai", text: displayText }]);
+      setInterviewerSubtitle(aiResponse.trim() ? aiResponse : displayText);
+      if (aiResponse.trim() && !suppressAvatar && avatarRef.current) {
+        try {
+          await avatarRef.current.repeat(aiResponse);
+        } catch (e) {
+          console.error("Avatar repeat failed:", e);
+        }
+      }
+    } finally {
+      setIsChatting(false);
+    }
+  };
+
+  const handleCodingGiveUp = async () => {
+    if (interviewMode !== "technical" || isChatting || !codingBrain.brainReady) return;
+    if (
+      !window.confirm(
+        "End the technical practice now? You’ll hear a closing message and the session will finish — no further questions."
+      )
+    ) {
+      return;
+    }
+    setIsChatting(true);
+    setMessages((prev) => [...prev, { role: "user", text: "Ended the coding exercise early." }]);
+    try {
+      const turn = await codingBrain.giveUpCoding();
+      if (!turn.ok) {
+        setMessages((prev) => [...prev, { role: "ai", text: `Error: ${turn.error}` }]);
+        return;
+      }
+      const { aiResponse, suppressAvatar } = turn;
+      const displayText =
+        aiResponse.trim() ||
+        "Thank you for the interview — we'll get back to you shortly.";
+      setMessages((prev) => [...prev, { role: "ai", text: displayText }]);
+      setInterviewerSubtitle(displayText);
+      if (displayText && !suppressAvatar && avatarRef.current) {
+        try {
+          await avatarRef.current.repeat(displayText);
+        } catch (e) {
+          console.error("Avatar repeat failed:", e);
+        }
+      }
     } finally {
       setIsChatting(false);
     }
@@ -1189,11 +1448,33 @@ export function LiveAvatarInterview() {
         }
       }
       stopCompositeDraw(meetingComposeRafRef);
+      meetingRecordMixReleaseRef.current?.();
+      meetingRecordMixReleaseRef.current = null;
       meetingRecordStreamRef.current?.getTracks().forEach((t) => t.stop());
       meetingRecordStreamRef.current = null;
       meetingRecorderRef.current = null;
+
+      const sessionMr = mediaRecorderRef.current;
+      if (sessionMr && sessionMr.state !== "inactive") {
+        try {
+          sessionMr.stop();
+        } catch {
+          /* ignore */
+        }
+      }
+      mediaRecorderRef.current = null;
+      sessionWebmRecorderStartedRef.current = false;
+      recorderMicStreamRef.current?.getTracks().forEach((t) => t.stop());
+      recorderMicStreamRef.current = null;
+      recordedChunksRef.current = [];
     };
   }, []);
+
+  const technicalCodingActive =
+    interviewMode === "technical" &&
+    sessionActive &&
+    codingBrain.inputMode === "code" &&
+    codingBrain.codingPrompt != null;
 
   const meetingShell = clsx(
     "relative flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl border border-neutral-200 bg-neutral-950 shadow-sm",
@@ -1202,46 +1483,15 @@ export function LiveAvatarInterview() {
       "h-screen max-h-screen w-screen max-w-none rounded-none border-0 shadow-none lg:min-h-0"
   );
 
-  const handleLeaveEndOnly = async () => {
-    setLeaveDialogOpen(false);
-    await discardLiveRecording();
-    await stopMeetingRecording(false);
-    await stopAvatarSession({ skipRecordingDiscard: true });
-  };
+  const sendDisabled =
+    isChatting ||
+    (interviewMode === "technical" &&
+      (!codingBrain.brainReady || codingBrain.isStartingBrain || technicalCodingActive));
 
-  const handleLeaveSave = async () => {
-    setLeaveDialogOpen(false);
-    const id = recordingIdRef.current;
-    if (!id) {
-      await stopMeetingRecording(false);
-      await stopAvatarSession({ skipRecordingDiscard: true });
-      return;
-    }
-    setSaveRecordingBusy(true);
-    try {
-      const blob = await stopMeetingRecording(true);
-      const res = await fetch(`/api/recordings/${id}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ messages: messagesRef.current, saveTranscript: true }),
-      });
-      if (!res.ok) {
-        alert("Could not save your transcript. The session will end without saving.");
-        await discardLiveRecording();
-        await stopAvatarSession({ skipRecordingDiscard: true });
-        return;
-      }
-      recordingSavedRef.current = true;
-      if (blob && blob.size > 0) {
-        triggerWebmDownload(blob, id);
-      }
-      recordingIdRef.current = null;
-      await stopAvatarSession({ skipRecordingDiscard: true });
-      router.push("/dashboard/recordings");
-      router.refresh();
-    } finally {
-      setSaveRecordingBusy(false);
-    }
+  const handleLeaveMeeting = async () => {
+    await discardLiveRecording();
+    await stopSessionWebmRecording(false);
+    await stopAvatarSession({ skipRecordingDiscard: true });
   };
 
   return (
@@ -1253,13 +1503,43 @@ export function LiveAvatarInterview() {
       </div>
 
       <div ref={stageContainerRef} className={meetingShell}>
-        {/* Main stage — avatar / video */}
+        {interviewMode === "technical" &&
+          sessionActive &&
+          codingBrain.integrityFlags.length > 0 &&
+          !codingBrain.integrityDismissed && (
+            <div className="flex shrink-0 items-start justify-between gap-2 border-b border-amber-500/25 bg-amber-950/40 px-3 py-2.5 text-xs text-amber-100 sm:px-4">
+              <div>
+                <span className="font-semibold text-amber-200/95">Practice note</span>
+                <ul className="mt-1 list-inside list-disc space-y-0.5 text-amber-100/90">
+                  {codingIntegrityLines(codingBrain.integrityFlags).map((line, i) => (
+                    <li key={i}>{line}</li>
+                  ))}
+                </ul>
+              </div>
+              <button
+                type="button"
+                className="shrink-0 text-amber-300 underline hover:text-amber-200"
+                onClick={() => codingBrain.setIntegrityDismissed(true)}
+              >
+                Dismiss
+              </button>
+            </div>
+          )}
         <div
           className={clsx(
-            "relative flex min-h-[min(52vh,420px)] flex-1 flex-col bg-neutral-950 lg:min-h-0",
-            isStageFullscreen && "min-h-0 h-full"
+            "flex min-h-0 min-w-0 flex-1 flex-col",
+            technicalCodingActive && "lg:flex-row lg:items-stretch"
           )}
         >
+          {/* Main stage — avatar / video */}
+          <div
+            className={clsx(
+              "relative flex min-h-0 flex-1 flex-col bg-neutral-950 lg:min-h-0",
+              technicalCodingActive &&
+                "lg:min-h-[min(220px,32vh)] lg:max-w-[min(100%,560px)] lg:shrink-0 lg:border-r lg:border-white/10",
+              isStageFullscreen && "min-h-0 h-full"
+            )}
+          >
           <div className="absolute right-5 top-3 z-20 flex items-center gap-2 sm:right-6">
             {!sessionActive ? (
               <Listbox
@@ -1348,8 +1628,11 @@ export function LiveAvatarInterview() {
                 <div className="rounded-xl border border-white/10 bg-neutral-900/50 p-4 text-left">
                   <p className="text-sm font-semibold text-neutral-100">Role context (optional)</p>
                   <p className="mt-1 text-xs text-neutral-500">
-                    Add any details you want—the avatar and interviewer use them when provided. Technical vs behavioral follows
-                    the mode in the corner. Nothing here is required to start.
+                    Add any details you want—the avatar and interviewer use them when provided.{" "}
+                    <span className="text-neutral-400">
+                      Technical mode uses the same coding engine as Code Interview (editor + tests) with this dashboard UI.
+                    </span>{" "}
+                    Nothing here is required to start.
                   </p>
                   <div className="mt-4 space-y-3">
                     <div>
@@ -1504,98 +1787,6 @@ export function LiveAvatarInterview() {
             </div>
           )}
 
-          {sessionActive && cameraOn && (
-            <div
-              className="absolute bottom-28 right-4 z-20 overflow-hidden rounded-lg border-2 border-white/90 shadow-2xl sm:bottom-32"
-              style={{ width: pipWidth }}
-            >
-              <div className="relative aspect-video w-full">
-                <video
-                  ref={userVideoRef}
-                  autoPlay
-                  playsInline
-                  muted
-                  className="h-full w-full -scale-x-100 object-cover"
-                />
-                <canvas ref={bodyLanguage.canvasRef} className="hidden" aria-hidden />
-                <span className="absolute left-2 top-1.5 z-10 rounded bg-black/55 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-white/90">
-                  You
-                </span>
-                <BodyLanguagePipHud motionScore={bodyLanguage.motionScore} warnings={bodyLanguage.warnings} />
-                <div
-                  role="slider"
-                  aria-label="Resize your camera preview"
-                  aria-valuemin={PIP_WIDTH_MIN}
-                  aria-valuemax={PIP_WIDTH_MAX}
-                  aria-valuenow={pipWidth}
-                  tabIndex={0}
-                  onKeyDown={(e) => {
-                    if (
-                      e.key !== "ArrowLeft" &&
-                      e.key !== "ArrowRight" &&
-                      e.key !== "ArrowUp" &&
-                      e.key !== "ArrowDown"
-                    ) {
-                      return;
-                    }
-                    e.preventDefault();
-                    const step = e.shiftKey ? 24 : 12;
-                    const delta =
-                      e.key === "ArrowLeft" || e.key === "ArrowDown" ? -step : step;
-                    setPipWidthState((prev) => {
-                      const c = Math.min(PIP_WIDTH_MAX, Math.max(PIP_WIDTH_MIN, prev + delta));
-                      try {
-                        localStorage.setItem(PIP_WIDTH_STORAGE, String(c));
-                      } catch {
-                        /* ignore */
-                      }
-                      return c;
-                    });
-                  }}
-                  onPointerDown={(e) => {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    pipResizeDragRef.current = { startX: e.clientX, startW: pipWidth };
-                    e.currentTarget.setPointerCapture(e.pointerId);
-                  }}
-                  onPointerMove={(e) => {
-                    if (!pipResizeDragRef.current) return;
-                    const dx = e.clientX - pipResizeDragRef.current.startX;
-                    persistPipWidth(pipResizeDragRef.current.startW + dx);
-                  }}
-                  onPointerUp={(e) => {
-                    pipResizeDragRef.current = null;
-                    try {
-                      e.currentTarget.releasePointerCapture(e.pointerId);
-                    } catch {
-                      /* ignore */
-                    }
-                  }}
-                  onPointerCancel={(e) => {
-                    pipResizeDragRef.current = null;
-                    try {
-                      e.currentTarget.releasePointerCapture(e.pointerId);
-                    } catch {
-                      /* ignore */
-                    }
-                  }}
-                  className="absolute bottom-0 right-0 z-30 flex h-5 w-5 cursor-nwse-resize touch-none items-end justify-end rounded-tl-md bg-white/35 p-0.5 hover:bg-white/55 focus:outline-none focus-visible:ring-2 focus-visible:ring-white/80"
-                >
-                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" className="text-white drop-shadow" aria-hidden>
-                    <path
-                      d="M14 10l6-6M20 10V4h-6M4 20l6-6M10 20v-6H4"
-                      stroke="currentColor"
-                      strokeWidth="2.5"
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                    />
-                  </svg>
-                </div>
-              </div>
-              <span className="sr-only">Your camera preview with motion hints</span>
-            </div>
-          )}
-
           {sessionActive && input.trim() ? (
             <div
               className="pointer-events-none absolute inset-x-0 top-0 z-10 flex flex-col items-center bg-linear-to-b from-black/90 via-black/45 to-transparent px-4 pb-12 pt-3 sm:pb-14 sm:pt-4"
@@ -1614,23 +1805,304 @@ export function LiveAvatarInterview() {
 
           {sessionActive && interviewerSubtitle ? (
             <div
-              className="pointer-events-none absolute inset-x-0 bottom-0 z-10 flex justify-center bg-linear-to-t from-black/90 via-black/55 to-transparent px-4 pb-28 pt-20 sm:pb-32 sm:pt-24"
+              className={clsx(
+                "pointer-events-none absolute inset-x-0 bottom-0 z-10 flex justify-center bg-linear-to-t from-black/90 via-black/55 to-transparent px-4",
+                technicalCodingActive ? "pb-4 pt-10 sm:pb-5 sm:pt-12" : "pb-8 pt-16 sm:pb-10 sm:pt-20"
+              )}
               role="status"
               aria-live="polite"
               aria-atomic="true"
             >
               <span className="sr-only">Interviewer</span>
-              <p className="max-h-32 max-w-4xl overflow-y-auto text-center text-base font-medium leading-snug tracking-wide text-white [text-shadow:0_1px_2px_rgba(0,0,0,0.9)] sm:text-lg">
+              <p
+                className={clsx(
+                  "max-w-4xl overflow-y-auto text-center text-base font-medium leading-snug tracking-wide text-white [text-shadow:0_1px_2px_rgba(0,0,0,0.9)] sm:text-lg",
+                  technicalCodingActive ? "max-h-24 sm:max-h-28" : "max-h-32"
+                )}
+              >
                 {interviewerSubtitle}
               </p>
             </div>
           ) : null}
 
-          {/* Zoom-style meeting controls */}
-          {sessionActive && (
-            <div className="absolute bottom-4 left-1/2 z-30 w-[calc(100%-1.5rem)] max-w-4xl -translate-x-1/2 px-2 sm:bottom-6 sm:w-auto sm:px-0">
+          {sessionActive && interviewMode === "technical" && codingBrain.isStartingBrain && (
+            <div className="pointer-events-none absolute bottom-20 left-3 right-3 z-20 rounded-lg bg-black/75 px-3 py-2 text-center text-xs text-white/95 sm:bottom-24">
+              Connecting to coding interview engine…
+            </div>
+          )}
+          {sessionActive &&
+            interviewMode === "technical" &&
+            !codingBrain.brainReady &&
+            !codingBrain.isStartingBrain && (
+              <div className="absolute bottom-20 left-3 right-3 z-20 flex justify-center sm:bottom-24">
+                <button
+                  type="button"
+                  onClick={() =>
+                    void (async () => {
+                      const started = await codingBrainRef.current.startBrain(interviewContextRef.current);
+                      if (!started.ok) {
+                        alert(`Could not connect: ${started.error}`);
+                        return;
+                      }
+                      const opening = started.opening.trim();
+                      setMessages(opening ? [{ role: "ai", text: opening }] : []);
+                      if (opening) {
+                        setInterviewerSubtitle(opening);
+                        const a = avatarRef.current;
+                        if (a) {
+                          try {
+                            await a.repeat(opening);
+                          } catch (e) {
+                            console.error(e);
+                          }
+                        }
+                      }
+                    })()
+                  }
+                  className="rounded-lg border border-amber-600/60 bg-amber-950/90 px-4 py-2 text-sm font-medium text-amber-50 hover:bg-amber-900/90"
+                >
+                  Retry technical engine
+                </button>
+              </div>
+            )}
+          {sessionActive &&
+            interviewMode === "technical" &&
+            codingBrain.awaitingExplanation &&
+            !technicalCodingActive && (
+              <div className="absolute bottom-20 left-3 right-3 z-20 mx-auto max-w-lg rounded-lg border border-sky-500/35 bg-sky-950/90 px-3 py-2 text-center text-xs text-sky-100 sm:bottom-24">
+                Walk through your solution in your own words — then continue with Send.
+              </div>
+            )}
+        </div>
+
+        {technicalCodingActive && codingBrain.codingPrompt ? (
+          <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-3 overflow-y-auto border-t border-white/10 bg-neutral-950 p-3 lg:min-h-[min(480px,70vh)] lg:border-t-0 lg:border-l lg:border-white/10 lg:p-4">
+            <CodingProblemPanel problem={codingBrain.codingPrompt} />
+            <CodeEditorPanel
+              problem={codingBrain.codingPrompt}
+              disabled={isChatting || !codingBrain.brainReady || codingBrain.isStartingBrain}
+              onSubmit={(code, lang, summary) => void sendCodeSubmission(code, lang, summary)}
+              testResults={codingBrain.testResults}
+            />
+            <div className="flex flex-col items-stretch gap-2 sm:flex-row sm:items-center sm:justify-between">
+              <p className="text-center text-xs text-neutral-500 sm:text-left">
+                Submit from the editor when ready, or end the practice — you’ll hear a short closing message.
+              </p>
+              <button
+                type="button"
+                onClick={() => void handleCodingGiveUp()}
+                disabled={isChatting || !codingBrain.brainReady || codingBrain.isStartingBrain}
+                className="shrink-0 rounded-lg border border-white/20 bg-neutral-900 px-3 py-2 text-xs font-medium text-neutral-200 transition-colors hover:bg-neutral-800 disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                End session (give up)
+              </button>
+            </div>
+          </div>
+        ) : null}
+        </div>
+
+        {sessionActive && cameraOn && (
+          <div
+            className="pointer-events-auto absolute z-[35] overflow-hidden rounded-lg border-2 border-white/90 shadow-2xl"
+            style={{
+              width: pipWidth,
+              right: 16,
+              bottom: 88,
+              transform: `translate(${pipTranslate.x}px, ${pipTranslate.y}px)`,
+              transformOrigin: "bottom right",
+            }}
+          >
+            <div
+              className="flex h-6 cursor-grab touch-none items-center justify-center rounded-t-md bg-black/65 active:cursor-grabbing"
+              aria-label="Drag camera preview"
+              onPointerDown={(e) => {
+                e.preventDefault();
+                pipMoveDragRef.current = {
+                  startX: e.clientX,
+                  startY: e.clientY,
+                  tx: pipTranslate.x,
+                  ty: pipTranslate.y,
+                };
+                (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+              }}
+              onPointerMove={(e) => {
+                const d = pipMoveDragRef.current;
+                if (!d) return;
+                const nx = d.tx + (e.clientX - d.startX);
+                const ny = d.ty + (e.clientY - d.startY);
+                setPipTranslate(clampPipTranslate(nx, ny));
+              }}
+              onPointerUp={(e) => {
+                pipMoveDragRef.current = null;
+                setPipTranslate((cur) => {
+                  try {
+                    localStorage.setItem(PIP_TRANSLATE_STORAGE, JSON.stringify(cur));
+                  } catch {
+                    /* ignore */
+                  }
+                  return cur;
+                });
+                try {
+                  (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId);
+                } catch {
+                  /* ignore */
+                }
+              }}
+              onPointerCancel={(e) => {
+                pipMoveDragRef.current = null;
+                try {
+                  (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId);
+                } catch {
+                  /* ignore */
+                }
+              }}
+            >
+              <span className="select-none text-[11px] tracking-wide text-white/75">⋮⋮ drag</span>
+            </div>
+            <div className="relative aspect-video w-full">
+              <video
+                ref={userVideoRef}
+                autoPlay
+                playsInline
+                muted
+                className="h-full w-full -scale-x-100 object-cover"
+              />
+              <canvas ref={bodyLanguage.canvasRef} className="hidden" aria-hidden />
+              <span className="pointer-events-none absolute left-2 top-8 z-10 rounded bg-black/55 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-white/90">
+                You
+              </span>
+              <BodyLanguagePipHud motionScore={bodyLanguage.motionScore} warnings={bodyLanguage.warnings} />
               <div
-                className="flex flex-wrap items-center justify-center gap-2 rounded-2xl border border-white/10 bg-neutral-900/95 px-3 py-3 shadow-2xl backdrop-blur-md sm:gap-3 sm:px-5"
+                data-pip-resize
+                role="slider"
+                aria-label="Resize your camera preview"
+                aria-valuemin={PIP_WIDTH_MIN}
+                aria-valuemax={PIP_WIDTH_MAX}
+                aria-valuenow={pipWidth}
+                tabIndex={0}
+                onKeyDown={(e) => {
+                  if (
+                    e.key !== "ArrowLeft" &&
+                    e.key !== "ArrowRight" &&
+                    e.key !== "ArrowUp" &&
+                    e.key !== "ArrowDown"
+                  ) {
+                    return;
+                  }
+                  e.preventDefault();
+                  const step = e.shiftKey ? 24 : 12;
+                  const delta = e.key === "ArrowLeft" || e.key === "ArrowDown" ? -step : step;
+                  setPipWidthState((prev) => {
+                    const c = Math.min(PIP_WIDTH_MAX, Math.max(PIP_WIDTH_MIN, prev + delta));
+                    try {
+                      localStorage.setItem(PIP_WIDTH_STORAGE, String(c));
+                    } catch {
+                      /* ignore */
+                    }
+                    return c;
+                  });
+                }}
+                onPointerDown={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  pipResizeDragRef.current = { startX: e.clientX, startW: pipWidth };
+                  e.currentTarget.setPointerCapture(e.pointerId);
+                }}
+                onPointerMove={(e) => {
+                  if (!pipResizeDragRef.current) return;
+                  const dx = e.clientX - pipResizeDragRef.current.startX;
+                  persistPipWidth(pipResizeDragRef.current.startW + dx);
+                }}
+                onPointerUp={(e) => {
+                  pipResizeDragRef.current = null;
+                  try {
+                    e.currentTarget.releasePointerCapture(e.pointerId);
+                  } catch {
+                    /* ignore */
+                  }
+                }}
+                onPointerCancel={(e) => {
+                  pipResizeDragRef.current = null;
+                  try {
+                    e.currentTarget.releasePointerCapture(e.pointerId);
+                  } catch {
+                    /* ignore */
+                  }
+                }}
+                className="absolute bottom-0 right-0 z-30 flex h-5 w-5 cursor-nwse-resize touch-none items-end justify-end rounded-tl-md bg-white/35 p-0.5 hover:bg-white/55 focus:outline-none focus-visible:ring-2 focus-visible:ring-white/80"
+              >
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" className="text-white drop-shadow" aria-hidden>
+                  <path
+                    d="M14 10l6-6M20 10V4h-6M4 20l6-6M10 20v-6H4"
+                    stroke="currentColor"
+                    strokeWidth="2.5"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  />
+                </svg>
+              </div>
+            </div>
+            <span className="sr-only">Your camera preview with motion hints</span>
+          </div>
+        )}
+
+        {sessionActive && (
+          <div className="pointer-events-none relative z-40 flex shrink-0 justify-center border-t border-white/10 bg-neutral-950/98 px-2 py-2 backdrop-blur-md">
+            <div
+              className="pointer-events-auto flex max-w-full flex-col items-center gap-1"
+              style={{
+                transform: `translate(${toolbarTranslate.x}px, ${toolbarTranslate.y}px)`,
+              }}
+            >
+              <div
+                className="flex h-5 w-full max-w-xs cursor-grab touch-none items-center justify-center rounded-md bg-white/10 active:cursor-grabbing"
+                aria-label="Drag meeting controls"
+                onPointerDown={(e) => {
+                  e.preventDefault();
+                  toolbarMoveDragRef.current = {
+                    startX: e.clientX,
+                    startY: e.clientY,
+                    tx: toolbarTranslate.x,
+                    ty: toolbarTranslate.y,
+                  };
+                  (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+                }}
+                onPointerMove={(e) => {
+                  const d = toolbarMoveDragRef.current;
+                  if (!d) return;
+                  const nx = d.tx + (e.clientX - d.startX);
+                  const ny = d.ty + (e.clientY - d.startY);
+                  setToolbarTranslate(clampToolbarTranslate(nx, ny));
+                }}
+                onPointerUp={(e) => {
+                  toolbarMoveDragRef.current = null;
+                  setToolbarTranslate((cur) => {
+                    try {
+                      localStorage.setItem(TOOLBAR_TRANSLATE_STORAGE, JSON.stringify(cur));
+                    } catch {
+                      /* ignore */
+                    }
+                    return cur;
+                  });
+                  try {
+                    (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId);
+                  } catch {
+                    /* ignore */
+                  }
+                }}
+                onPointerCancel={(e) => {
+                  toolbarMoveDragRef.current = null;
+                  try {
+                    (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId);
+                  } catch {
+                    /* ignore */
+                  }
+                }}
+              >
+                <span className="select-none text-[10px] text-white/50">⋮⋮ drag toolbar</span>
+              </div>
+              <div
+                className="flex flex-wrap items-center justify-center gap-2 rounded-2xl border border-white/10 bg-neutral-900/95 px-3 py-2 shadow-xl backdrop-blur-md sm:gap-3 sm:px-5"
                 role="toolbar"
                 aria-label="Meeting controls"
               >
@@ -1694,8 +2166,8 @@ export function LiveAvatarInterview() {
                   type="text"
                   value={input}
                   onChange={(e) => setInput(e.target.value)}
-                  onKeyDown={(e) => e.key === "Enter" && void sendMessage()}
-                  disabled={isChatting}
+                  onKeyDown={(e) => e.key === "Enter" && !sendDisabled && void sendMessage()}
+                  disabled={sendDisabled}
                   tabIndex={-1}
                   className="sr-only"
                   aria-label="Your answer — shown as captions at the top; use the keyboard button or microphone"
@@ -1704,12 +2176,12 @@ export function LiveAvatarInterview() {
                 <button
                   type="button"
                   onClick={() => answerInputRef.current?.focus()}
-                  disabled={isChatting}
+                  disabled={sendDisabled}
                   title="Type with keyboard (captions at top)"
                   aria-label="Type with keyboard"
                   className={clsx(
                     "flex h-12 w-12 shrink-0 items-center justify-center rounded-full border border-white/15 bg-neutral-800/90 text-white transition-colors hover:bg-neutral-700",
-                    isChatting && "cursor-not-allowed opacity-40"
+                    sendDisabled && "cursor-not-allowed opacity-40"
                   )}
                 >
                   <svg width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden>
@@ -1723,7 +2195,7 @@ export function LiveAvatarInterview() {
                 <Button
                   type="button"
                   onClick={() => void sendMessage()}
-                  disabled={isChatting}
+                  disabled={sendDisabled}
                   className={clsx(
                     lightPrimaryButton,
                     "shrink-0 rounded-xl px-5 py-2.5 text-sm font-semibold"
@@ -1737,7 +2209,7 @@ export function LiveAvatarInterview() {
                 <ZoomControlButton
                   danger
                   label="Leave meeting"
-                  onClick={() => setLeaveDialogOpen(true)}
+                  onClick={() => void handleLeaveMeeting()}
                 >
                   <svg width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden>
                     <path
@@ -1751,56 +2223,9 @@ export function LiveAvatarInterview() {
                 </ZoomControlButton>
               </div>
             </div>
-          )}
-        </div>
+          </div>
+        )}
       </div>
-
-      <Dialog
-        open={leaveDialogOpen}
-        onClose={() => {
-          if (!saveRecordingBusy) setLeaveDialogOpen(false);
-        }}
-        className="relative z-[200]"
-      >
-        <DialogBackdrop className="fixed inset-0 bg-black/55 backdrop-blur-sm transition-opacity data-closed:opacity-0" />
-        <div className="fixed inset-0 flex items-center justify-center p-4">
-          <DialogPanel className="w-full max-w-md rounded-2xl border border-neutral-700 bg-neutral-900 p-6 shadow-2xl dark:border-neutral-600 dark:bg-neutral-950">
-            <DialogTitle className="text-lg font-semibold text-white">Leave mock interview?</DialogTitle>
-            <Description className="mt-2 text-sm text-neutral-400">
-              Your session is being captured in the browser (avatar video and your mic when allowed).{" "}
-              <strong className="font-medium text-neutral-200">Save</strong> stores the full transcript in Recordings and
-              downloads a local .webm clip. <strong className="font-medium text-neutral-200">End without saving</strong>{" "}
-              removes the draft recording.
-            </Description>
-            <div className="mt-6 flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:justify-end">
-              <button
-                type="button"
-                disabled={saveRecordingBusy}
-                onClick={() => setLeaveDialogOpen(false)}
-                className="rounded-xl border border-white/15 px-4 py-2.5 text-sm font-medium text-white/90 transition-colors hover:bg-white/10 disabled:opacity-50"
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                disabled={saveRecordingBusy}
-                onClick={() => void handleLeaveEndOnly()}
-                className="rounded-xl border border-red-500/50 bg-red-950/80 px-4 py-2.5 text-sm font-semibold text-red-100 transition-colors hover:bg-red-900/90 disabled:opacity-50"
-              >
-                End without saving
-              </button>
-              <button
-                type="button"
-                disabled={saveRecordingBusy}
-                onClick={() => void handleLeaveSave()}
-                className="rounded-xl bg-white px-4 py-2.5 text-sm font-semibold text-neutral-900 transition-colors hover:bg-neutral-100 disabled:opacity-50"
-              >
-                {saveRecordingBusy ? "Saving…" : "Save recording"}
-              </button>
-            </div>
-          </DialogPanel>
-        </div>
-      </Dialog>
     </div>
   );
 }

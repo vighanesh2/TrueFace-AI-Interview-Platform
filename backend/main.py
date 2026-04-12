@@ -8,7 +8,7 @@ from typing import Any, Literal
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from .graph import run_session_start, run_session_turn
 from .llm_code_tests import ensure_problem_has_test_cases, evaluate_code_with_gemini
@@ -120,10 +120,19 @@ class StartBody(BaseModel):
 
 
 class TurnBody(BaseModel):
-    answer: str = Field(..., min_length=1)
+    answer: str = Field(default="")
     code: str | None = None
     language: str | None = None
     keystroke_summary: dict[str, Any] | None = None
+    give_up_coding: bool = False
+
+    @model_validator(mode="after")
+    def _answer_or_give_up(self):
+        if self.give_up_coding:
+            return self
+        if not (self.answer or "").strip():
+            raise ValueError("answer is required unless give_up_coding is true")
+        return self
 
 
 class StartResponse(BaseModel):
@@ -238,6 +247,59 @@ def session_turn(session_id: str, body: TurnBody) -> TurnResponse:
             awaiting_explanation=bool(st.get("awaiting_explanation")),
             test_runner=st.get("last_test_runner") if isinstance(st.get("last_test_runner"), str) else None,
         )
+
+    if body.give_up_coding:
+        if (st.get("input_mode") or "") != "code" or not isinstance(st.get("coding_prompt"), dict):
+            raise HTTPException(
+                status_code=400,
+                detail="No active coding exercise to skip.",
+            )
+        thank_you = (
+            "Thank you for the interview — we'll get back to you shortly."
+        )
+        hist = list(st.get("conversation_history") or [])
+        hist.append(
+            {
+                "role": "user",
+                "content": (
+                    "[Skipped coding problem] The candidate chose to give up on this exercise "
+                    "and end the practice session."
+                ),
+            }
+        )
+        hist.append({"role": "assistant", "content": thank_you})
+        st["conversation_history"] = hist
+        st["coding_prompt"] = None
+        st["input_mode"] = "chat"
+        st["test_results"] = None
+        st["integrity_flags"] = []
+        st["coding_turns_given"] = int(st.get("coding_turns_given") or 0) + 1
+        st["next_response"] = thank_you
+        st["turn_count"] = int(st.get("turn_count") or 0) + 1
+        st["interview_done"] = True
+        st["phase"] = "wrap_up"
+        st["current_topic"] = "closing"
+        st["current_part_index"] = 4
+        st["awaiting_explanation"] = False
+        st["deferred_next_topic"] = None
+        _sessions[session_id] = st
+        return TurnResponse(
+            response=thank_you,
+            phase="wrap_up",
+            phase_label=_phase_label("wrap_up"),
+            turn=int(st.get("turn_count") or 0),
+            topic="closing",
+            interview_done=True,
+            current_part_index=4,
+            roadmap=st.get("roadmap"),
+            input_mode="chat",
+            coding_prompt=None,
+            integrity_flags=[],
+            test_results=None,
+            awaiting_explanation=False,
+            test_runner=None,
+        )
+
     if not (body.code and body.code.strip()):
         st["integrity_flags"] = []
     hist = list(st.get("conversation_history") or [])

@@ -7,12 +7,9 @@ import {
   getRecordingForUser,
   saveLiveAvatarTranscript,
   setRecordingCompleted,
-<<<<<<< Updated upstream
   setRecordingMeetingVideo,
-=======
   type RecordingChatMessage,
   type RecordingSource,
->>>>>>> Stashed changes
 } from "@/lib/recordings";
 
 type Ctx = { params: Promise<{ id: string }> };
@@ -27,8 +24,8 @@ export async function GET(_req: Request, ctx: Ctx) {
   if (!rec) {
     return NextResponse.json({ error: "Not found" }, { status: 404 });
   }
-  const src = (rec as { source?: RecordingSource }).source ?? "text_chat";
-  const msgs = (rec as { messages?: RecordingChatMessage[] }).messages;
+  const src: RecordingSource = rec.source ?? "text_chat";
+  const msgs = rec.messages;
   return NextResponse.json({
     id: rec._id.toString(),
     type: rec.type,
@@ -49,11 +46,13 @@ export async function PATCH(req: Request, ctx: Ctx) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
   const { id } = await ctx.params;
-<<<<<<< Updated upstream
-  let body: { messageDelta?: number; complete?: boolean; meetingVideoUrl?: string };
-=======
-  let body: { messageDelta?: number; complete?: boolean; messages?: unknown; saveTranscript?: boolean };
->>>>>>> Stashed changes
+  let body: {
+    messageDelta?: number;
+    complete?: boolean;
+    meetingVideoUrl?: string;
+    saveTranscript?: boolean;
+    messages?: unknown[];
+  };
   try {
     body = await req.json();
   } catch {

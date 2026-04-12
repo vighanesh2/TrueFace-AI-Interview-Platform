@@ -18,14 +18,12 @@ export type RecordingWrite = {
   messageCount: number;
   createdAt: Date;
   updatedAt: Date;
-<<<<<<< Updated upstream
+  /** Present on new rows; omitted on legacy docs. */
+  source?: RecordingSource;
   /** Public Vercel Blob URL for a saved mock-interview video, when recorded */
   meetingVideoUrl?: string;
-=======
-  source: RecordingSource;
   /** Full transcript when saved from Live Avatar (or copied from text chat later). */
   messages?: RecordingChatMessage[];
->>>>>>> Stashed changes
 };
 
 export type RecordingDoc = RecordingWrite & { _id: ObjectId };
@@ -116,19 +114,11 @@ export async function setRecordingCompleted(recordingId: string, userId: ObjectI
   );
 }
 
-<<<<<<< Updated upstream
 export async function setRecordingMeetingVideo(
   recordingId: string,
   userId: ObjectId,
   meetingVideoUrl: string
 ): Promise<boolean> {
-=======
-export async function saveLiveAvatarTranscript(
-  recordingId: string,
-  userId: ObjectId,
-  messages: RecordingChatMessage[]
-) {
->>>>>>> Stashed changes
   let oid: ObjectId;
   try {
     oid = new ObjectId(recordingId);
@@ -136,13 +126,25 @@ export async function saveLiveAvatarTranscript(
     return false;
   }
   const db = await getDb();
-<<<<<<< Updated upstream
   const r = await recordingsCollection(db).updateOne(
     { _id: oid, userId },
     { $set: { meetingVideoUrl, updatedAt: new Date() } }
   );
   return r.matchedCount > 0;
-=======
+}
+
+export async function saveLiveAvatarTranscript(
+  recordingId: string,
+  userId: ObjectId,
+  messages: RecordingChatMessage[]
+): Promise<boolean> {
+  let oid: ObjectId;
+  try {
+    oid = new ObjectId(recordingId);
+  } catch {
+    return false;
+  }
+  const db = await getDb();
   const now = new Date();
   const count = messages.length;
   const res = await recordingsCollection(db).updateOne(
@@ -169,5 +171,4 @@ export async function deleteRecording(recordingId: string, userId: ObjectId): Pr
   const db = await getDb();
   const res = await recordingsCollection(db).deleteOne({ _id: oid, userId });
   return res.deletedCount > 0;
->>>>>>> Stashed changes
 }

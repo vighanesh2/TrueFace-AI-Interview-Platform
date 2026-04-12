@@ -57,9 +57,8 @@ export async function POST(req: Request) {
   } catch (e) {
     console.error("Recording indexes:", e);
   }
-<<<<<<< Updated upstream
   const uid = new ObjectId(user.id);
-  const id = await createRecording(uid, type as InterviewType);
+  const id = await createRecording(uid, type as InterviewType, { source });
   const idStr = id.toString();
   return NextResponse.json(
     {
@@ -69,8 +68,4 @@ export async function POST(req: Request) {
     },
     { status: 201 }
   );
-=======
-  const id = await createRecording(new ObjectId(user.id), type as InterviewType, { source });
-  return NextResponse.json({ id: id.toString(), type, source }, { status: 201 });
->>>>>>> Stashed changes
 }
