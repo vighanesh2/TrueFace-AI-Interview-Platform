@@ -16,7 +16,8 @@ import { useCallback, useEffect, useRef, useState, type ReactNode } from "react"
 import { lightPrimaryButton } from "@/lib/dashboard-light-theme";
 import { buildInterviewKnowledge } from "@/lib/interview-context";
 import type { LiveavatarInterviewerGender } from "@/lib/liveavatar-interviewers";
-import { BodyLanguagePipHud, useBodyLanguageAnalysis } from "@/components/body-language-tracker";
+import { BodyLanguagePipHud } from "@/components/body-language-pip-hud";
+import { useBodyLanguageAnalysis } from "@/components/body-language-tracker";
 import {
   CodeEditorPanel,
   type KeystrokeSummary,
