@@ -27,3 +27,18 @@ class InterviewState(TypedDict, total=False):
     current_part_index: int
     # User /turn calls while phase == "technical" (post-intake); gates premature SD transition)
     technical_user_turns: int
+    # "chat" | "code" — UI shows editor when "code" during technical phase
+    input_mode: str
+    # Structured problem (LLM JSON): title, description, examples, constraints, starter_code, time_limit_seconds, spoken_summary
+    coding_prompt: dict[str, Any]
+    code_submissions: list[dict[str, Any]]
+    coding_turns_given: int
+    integrity_flags: list[str]
+    # Next technical topic to apply after a coding challenge completes (set when deferring topic advance)
+    deferred_next_topic: str
+    # Last automated test run (Gemini checks against problem.test_cases)
+    test_results: list[dict[str, Any]]
+    # After paste-flagged pass, user must send one chat explanation before topic resumes
+    awaiting_explanation: bool
+    # "gemini" after automated test evaluation
+    last_test_runner: str
