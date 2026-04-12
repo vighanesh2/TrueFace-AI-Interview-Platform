@@ -1,7 +1,13 @@
 import { NextResponse } from "next/server";
 import { ObjectId } from "mongodb";
 import { getSessionUser } from "@/lib/auth";
-import { createRecording, ensureRecordingIndexes, listRecordingsForUser, type InterviewType } from "@/lib/recordings";
+import {
+  createRecording,
+  ensureRecordingIndexes,
+  listRecordingsForUser,
+  type InterviewType,
+  type RecordingSource,
+} from "@/lib/recordings";
 
 export async function GET() {
   const user = await getSessionUser();
@@ -21,6 +27,7 @@ export async function GET() {
       title: r.title,
       status: r.status,
       messageCount: r.messageCount,
+      source: (r as { source?: RecordingSource }).source ?? "text_chat",
       createdAt: r.createdAt.toISOString(),
       updatedAt: r.updatedAt.toISOString(),
       meetingVideoUrl: r.meetingVideoUrl ?? null,
@@ -33,7 +40,7 @@ export async function POST(req: Request) {
   if (!user) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
-  let body: { type?: string };
+  let body: { type?: string; source?: string };
   try {
     body = await req.json();
   } catch {
@@ -43,11 +50,14 @@ export async function POST(req: Request) {
   if (!type) {
     return NextResponse.json({ error: "type must be technical or behavioral" }, { status: 400 });
   }
+  const source: RecordingSource =
+    body.source === "live_avatar" ? "live_avatar" : "text_chat";
   try {
     await ensureRecordingIndexes();
   } catch (e) {
     console.error("Recording indexes:", e);
   }
+<<<<<<< Updated upstream
   const uid = new ObjectId(user.id);
   const id = await createRecording(uid, type as InterviewType);
   const idStr = id.toString();
@@ -59,4 +69,8 @@ export async function POST(req: Request) {
     },
     { status: 201 }
   );
+=======
+  const id = await createRecording(new ObjectId(user.id), type as InterviewType, { source });
+  return NextResponse.json({ id: id.toString(), type, source }, { status: 201 });
+>>>>>>> Stashed changes
 }

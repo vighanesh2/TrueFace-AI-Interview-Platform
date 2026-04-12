@@ -1,6 +1,17 @@
 "use client";
 
-import { Button, Listbox, ListboxButton, ListboxOption, ListboxOptions } from "@headlessui/react";
+import {
+  Button,
+  Description,
+  Dialog,
+  DialogBackdrop,
+  DialogPanel,
+  DialogTitle,
+  Listbox,
+  ListboxButton,
+  ListboxOption,
+  ListboxOptions,
+} from "@headlessui/react";
 import { LiveAvatarSession, SessionEvent } from "@heygen/liveavatar-web-sdk";
 import { upload } from "@vercel/blob/client";
 import clsx from "clsx";
@@ -162,6 +173,7 @@ function IconFullscreenExit({ className }: { className?: string }) {
   );
 }
 
+<<<<<<< Updated upstream
 function IconRecord({ className }: { className?: string }) {
   return (
     <svg className={className} width="22" height="22" viewBox="0 0 24 24" fill="none" aria-hidden>
@@ -251,6 +263,28 @@ function blobUploadContentType(raw: string): string {
   return "video/webm";
 }
 
+=======
+function pickMeetingRecorderMime(): string {
+  const candidates = ["video/webm;codecs=vp8,opus", "video/webm;codecs=vp9,opus", "video/webm"];
+  for (const m of candidates) {
+    if (typeof MediaRecorder !== "undefined" && MediaRecorder.isTypeSupported(m)) return m;
+  }
+  return "video/webm";
+}
+
+function triggerWebmDownload(blob: Blob, hintId: string) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `trueface-mock-${hintId.slice(-10)}.webm`;
+  a.rel = "noopener";
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
+
+>>>>>>> Stashed changes
 function ZoomControlButton({
   active,
   danger,
@@ -313,6 +347,8 @@ export function LiveAvatarInterview() {
 
   const [input, setInput] = useState("");
   const [messages, setMessages] = useState<{ role: string; text: string }[]>([]);
+  const messagesRef = useRef(messages);
+  messagesRef.current = messages;
   const [isAvatarStarting, setIsAvatarStarting] = useState(false);
   const [isChatting, setIsChatting] = useState(false);
   const [sessionActive, setSessionActive] = useState(false);
@@ -332,6 +368,7 @@ export function LiveAvatarInterview() {
   const pipResizeDragRef = useRef<{ startX: number; startW: number } | null>(null);
   const answerInputRef = useRef<HTMLInputElement | null>(null);
 
+<<<<<<< Updated upstream
   const meetingComposeRafRef = useRef<number | null>(null);
   const meetingRecordStreamRef = useRef<MediaStream | null>(null);
   const meetingRecorderRef = useRef<MediaRecorder | null>(null);
@@ -341,6 +378,18 @@ export function LiveAvatarInterview() {
   const meetingStopUploadPromiseRef = useRef<Promise<void> | null>(null);
 
   const [meetingRecordState, setMeetingRecordState] = useState<"idle" | "recording" | "uploading">("idle");
+=======
+  const recordingIdRef = useRef<string | null>(null);
+  const recordingSavedRef = useRef(false);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const recordedChunksRef = useRef<BlobPart[]>([]);
+  const recordedMimeRef = useRef("");
+  const recorderMicStreamRef = useRef<MediaStream | null>(null);
+  const meetingRecorderStartedRef = useRef(false);
+
+  const [leaveDialogOpen, setLeaveDialogOpen] = useState(false);
+  const [saveRecordingBusy, setSaveRecordingBusy] = useState(false);
+>>>>>>> Stashed changes
 
   const [pipWidth, setPipWidthState] = useState(200);
   useEffect(() => {
@@ -764,9 +813,90 @@ export function LiveAvatarInterview() {
     void el.play().catch(() => {});
   }, [cameraOn]);
 
+<<<<<<< Updated upstream
   const stopAvatarSession = async () => {
     await stopMeetingRecordingAndUpload();
 
+=======
+  const discardLiveRecording = useCallback(async () => {
+    const id = recordingIdRef.current;
+    recordingIdRef.current = null;
+    if (!id) return;
+    try {
+      await fetch(`/api/recordings/${id}`, { method: "DELETE" });
+    } catch (e) {
+      console.error("Discard recording:", e);
+    }
+  }, []);
+
+  const stopMeetingRecording = useCallback((wantBlob: boolean): Promise<Blob | null> => {
+    meetingRecorderStartedRef.current = false;
+    const mr = mediaRecorderRef.current;
+    mediaRecorderRef.current = null;
+    const mic = recorderMicStreamRef.current;
+    recorderMicStreamRef.current = null;
+    mic?.getTracks().forEach((t) => t.stop());
+
+    return new Promise((resolve) => {
+      if (!mr || mr.state === "inactive") {
+        recordedChunksRef.current = [];
+        resolve(null);
+        return;
+      }
+      mr.onstop = () => {
+        const chunks = [...recordedChunksRef.current];
+        recordedChunksRef.current = [];
+        const mime = recordedMimeRef.current || "video/webm";
+        if (wantBlob && chunks.length > 0) {
+          resolve(new Blob(chunks, { type: mime }));
+        } else {
+          resolve(null);
+        }
+      };
+      try {
+        mr.stop();
+      } catch {
+        recordedChunksRef.current = [];
+        resolve(null);
+      }
+    });
+  }, []);
+
+  const startMeetingRecording = useCallback(async (videoEl: HTMLVideoElement) => {
+    if (meetingRecorderStartedRef.current || typeof MediaRecorder === "undefined") return;
+    recordedChunksRef.current = [];
+    const v = videoEl as HTMLVideoElement & { captureStream?: (fps?: number) => MediaStream };
+    const cap = v.captureStream?.(24);
+    if (!cap || cap.getVideoTracks().length === 0) return;
+    const tracks: MediaStreamTrack[] = [...cap.getVideoTracks()];
+    try {
+      const mic = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+      recorderMicStreamRef.current = mic;
+      const at = mic.getAudioTracks()[0];
+      if (at) tracks.push(at);
+    } catch {
+      /* avatar video only */
+    }
+    const out = new MediaStream(tracks);
+    const mime = pickMeetingRecorderMime();
+    recordedMimeRef.current = mime;
+    try {
+      const mr = new MediaRecorder(out, { mimeType: mime });
+      mr.ondataavailable = (e) => {
+        if (e.data.size > 0) recordedChunksRef.current.push(e.data);
+      };
+      mr.start(1000);
+      mediaRecorderRef.current = mr;
+      meetingRecorderStartedRef.current = true;
+    } catch (e) {
+      console.error("MediaRecorder start:", e);
+      recorderMicStreamRef.current?.getTracks().forEach((t) => t.stop());
+      recorderMicStreamRef.current = null;
+    }
+  }, []);
+
+  const stopAvatarSession = async (opts?: { skipRecordingDiscard?: boolean }) => {
+>>>>>>> Stashed changes
     const shell = stageContainerRef.current;
     if (shell && getFullscreenElement() === shell) {
       try {
@@ -775,6 +905,15 @@ export function LiveAvatarInterview() {
         /* ignore */
       }
     }
+
+    void stopMeetingRecording(false);
+
+    if (!opts?.skipRecordingDiscard && recordingIdRef.current && !recordingSavedRef.current) {
+      await discardLiveRecording();
+    } else {
+      recordingIdRef.current = null;
+    }
+    recordingSavedRef.current = false;
 
     if (avatarRef.current) {
       try {
@@ -792,7 +931,30 @@ export function LiveAvatarInterview() {
     stopUserCamera();
 
     stopSpeechRecognitionUserIntent();
+    setLeaveDialogOpen(false);
   };
+
+  useEffect(() => {
+    if (!sessionActive) return;
+    const video = document.getElementById("avatar-video") as HTMLVideoElement | null;
+    if (!video) return;
+
+    let cancelled = false;
+    const tryStart = () => {
+      if (cancelled || meetingRecorderStartedRef.current) return;
+      void startMeetingRecording(video);
+    };
+
+    video.addEventListener("playing", tryStart, { once: true });
+    if (video.readyState >= HTMLMediaElement.HAVE_FUTURE_DATA && !video.paused) {
+      tryStart();
+    }
+
+    return () => {
+      cancelled = true;
+      video.removeEventListener("playing", tryStart);
+    };
+  }, [sessionActive, startMeetingRecording]);
 
   const startAvatarSession = async () => {
     if (isAvatarStarting || sessionActive) return;
@@ -813,8 +975,13 @@ export function LiveAvatarInterview() {
     setIsAvatarStarting(true);
     setMessages([]);
     brainSessionIdRef.current = null;
+<<<<<<< Updated upstream
     meetingRecordingIdRef.current = null;
     meetingBlobPathRef.current = null;
+=======
+    recordingIdRef.current = null;
+    recordingSavedRef.current = false;
+>>>>>>> Stashed changes
 
     const modeAtStart = interviewMode;
     const genderAtStart = interviewerGender;
@@ -848,6 +1015,24 @@ export function LiveAvatarInterview() {
           avatar.attach(videoElement);
           setSessionActive(true);
         }
+        void (async () => {
+          try {
+            const res = await fetch("/api/recordings", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                type: modeAtStart === "behavioral" ? "behavioral" : "technical",
+                source: "live_avatar",
+              }),
+            });
+            const j = (await res.json()) as { id?: string };
+            if (res.ok && j.id) {
+              recordingIdRef.current = j.id;
+            }
+          } catch (e) {
+            console.error("Recording row:", e);
+          }
+        })();
         if (modeAtStart === "behavioral") {
           void (async () => {
             try {
@@ -1016,6 +1201,48 @@ export function LiveAvatarInterview() {
     isStageFullscreen &&
       "h-screen max-h-screen w-screen max-w-none rounded-none border-0 shadow-none lg:min-h-0"
   );
+
+  const handleLeaveEndOnly = async () => {
+    setLeaveDialogOpen(false);
+    await discardLiveRecording();
+    await stopMeetingRecording(false);
+    await stopAvatarSession({ skipRecordingDiscard: true });
+  };
+
+  const handleLeaveSave = async () => {
+    setLeaveDialogOpen(false);
+    const id = recordingIdRef.current;
+    if (!id) {
+      await stopMeetingRecording(false);
+      await stopAvatarSession({ skipRecordingDiscard: true });
+      return;
+    }
+    setSaveRecordingBusy(true);
+    try {
+      const blob = await stopMeetingRecording(true);
+      const res = await fetch(`/api/recordings/${id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ messages: messagesRef.current, saveTranscript: true }),
+      });
+      if (!res.ok) {
+        alert("Could not save your transcript. The session will end without saving.");
+        await discardLiveRecording();
+        await stopAvatarSession({ skipRecordingDiscard: true });
+        return;
+      }
+      recordingSavedRef.current = true;
+      if (blob && blob.size > 0) {
+        triggerWebmDownload(blob, id);
+      }
+      recordingIdRef.current = null;
+      await stopAvatarSession({ skipRecordingDiscard: true });
+      router.push("/dashboard/recordings");
+      router.refresh();
+    } finally {
+      setSaveRecordingBusy(false);
+    }
+  };
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
@@ -1510,7 +1737,7 @@ export function LiveAvatarInterview() {
                 <ZoomControlButton
                   danger
                   label="Leave meeting"
-                  onClick={() => void stopAvatarSession()}
+                  onClick={() => setLeaveDialogOpen(true)}
                 >
                   <svg width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden>
                     <path
@@ -1527,6 +1754,53 @@ export function LiveAvatarInterview() {
           )}
         </div>
       </div>
+
+      <Dialog
+        open={leaveDialogOpen}
+        onClose={() => {
+          if (!saveRecordingBusy) setLeaveDialogOpen(false);
+        }}
+        className="relative z-[200]"
+      >
+        <DialogBackdrop className="fixed inset-0 bg-black/55 backdrop-blur-sm transition-opacity data-closed:opacity-0" />
+        <div className="fixed inset-0 flex items-center justify-center p-4">
+          <DialogPanel className="w-full max-w-md rounded-2xl border border-neutral-700 bg-neutral-900 p-6 shadow-2xl dark:border-neutral-600 dark:bg-neutral-950">
+            <DialogTitle className="text-lg font-semibold text-white">Leave mock interview?</DialogTitle>
+            <Description className="mt-2 text-sm text-neutral-400">
+              Your session is being captured in the browser (avatar video and your mic when allowed).{" "}
+              <strong className="font-medium text-neutral-200">Save</strong> stores the full transcript in Recordings and
+              downloads a local .webm clip. <strong className="font-medium text-neutral-200">End without saving</strong>{" "}
+              removes the draft recording.
+            </Description>
+            <div className="mt-6 flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:justify-end">
+              <button
+                type="button"
+                disabled={saveRecordingBusy}
+                onClick={() => setLeaveDialogOpen(false)}
+                className="rounded-xl border border-white/15 px-4 py-2.5 text-sm font-medium text-white/90 transition-colors hover:bg-white/10 disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={saveRecordingBusy}
+                onClick={() => void handleLeaveEndOnly()}
+                className="rounded-xl border border-red-500/50 bg-red-950/80 px-4 py-2.5 text-sm font-semibold text-red-100 transition-colors hover:bg-red-900/90 disabled:opacity-50"
+              >
+                End without saving
+              </button>
+              <button
+                type="button"
+                disabled={saveRecordingBusy}
+                onClick={() => void handleLeaveSave()}
+                className="rounded-xl bg-white px-4 py-2.5 text-sm font-semibold text-neutral-900 transition-colors hover:bg-neutral-100 disabled:opacity-50"
+              >
+                {saveRecordingBusy ? "Saving…" : "Save recording"}
+              </button>
+            </div>
+          </DialogPanel>
+        </div>
+      </Dialog>
     </div>
   );
 }

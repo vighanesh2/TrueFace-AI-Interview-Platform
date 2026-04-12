@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { createUser, ensureAuthIndexes, findUserByEmail, hashPassword } from "@/lib/auth";
+import { createUser, ensureAuthIndexes, findUserByEmail, hashPassword, type UserRole } from "@/lib/auth";
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
@@ -10,7 +10,7 @@ export async function POST(req: Request) {
     console.error("Auth index setup:", e);
   }
 
-  let body: { email?: string; password?: string };
+  let body: { email?: string; password?: string; role?: string };
   try {
     body = await req.json();
   } catch {
@@ -19,6 +19,14 @@ export async function POST(req: Request) {
 
   const email = typeof body.email === "string" ? body.email : "";
   const password = typeof body.password === "string" ? body.password : "";
+  const roleRaw = typeof body.role === "string" ? body.role.trim() : "";
+  if (roleRaw !== "candidate" && roleRaw !== "interviewer") {
+    return NextResponse.json(
+      { error: "Choose a role: candidate or interviewer" },
+      { status: 400 }
+    );
+  }
+  const role = roleRaw as UserRole;
 
   if (!EMAIL_RE.test(email)) {
     return NextResponse.json({ error: "Invalid email" }, { status: 400 });
@@ -33,7 +41,7 @@ export async function POST(req: Request) {
   }
 
   const passwordHash = await hashPassword(password);
-  await createUser(email, passwordHash);
+  await createUser(email, passwordHash, role);
 
-  return NextResponse.json({ ok: true }, { status: 201 });
+  return NextResponse.json({ ok: true, role }, { status: 201 });
 }

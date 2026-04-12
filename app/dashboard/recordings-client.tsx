@@ -13,10 +13,18 @@ type RecordingRow = {
   title: string;
   status: string;
   messageCount: number;
+  source?: "text_chat" | "live_avatar";
   createdAt: string;
   updatedAt: string;
   meetingVideoUrl: string | null;
 };
+
+function recordingHref(r: RecordingRow): string {
+  if (r.source === "live_avatar") {
+    return `/dashboard/recording/${r.id}`;
+  }
+  return `/interview/${r.id}`;
+}
 
 export function RecordingsClient() {
   const router = useRouter();
@@ -74,10 +82,20 @@ export function RecordingsClient() {
           <ul className="flex flex-col gap-4">
             {recordings.map((r) => (
               <li key={r.id}>
+<<<<<<< Updated upstream
                 <div className="flex items-stretch gap-2 rounded-xl border border-neutral-200 bg-white shadow-sm transition-colors hover:border-neutral-300 hover:shadow-md dark:border-neutral-700 dark:bg-neutral-900 dark:hover:border-neutral-600 sm:gap-0">
                   <Link
                     href={`/interview/${r.id}`}
                     className="flex min-w-0 flex-1 gap-4 p-4 transition-colors hover:bg-neutral-50/80 dark:hover:bg-neutral-800/40"
+=======
+                <Link
+                  href={recordingHref(r)}
+                  className="flex gap-4 rounded-xl border border-neutral-200 bg-white p-4 shadow-sm transition-colors hover:border-neutral-300 hover:shadow-md dark:border-neutral-700 dark:bg-neutral-900 dark:hover:border-neutral-600"
+                >
+                  <div
+                    className="relative h-24 w-36 shrink-0 overflow-hidden rounded-lg bg-neutral-200 dark:bg-neutral-800"
+                    aria-hidden
+>>>>>>> Stashed changes
                   >
                     <div
                       className="relative h-24 w-36 shrink-0 overflow-hidden rounded-lg bg-neutral-200 dark:bg-neutral-800"
