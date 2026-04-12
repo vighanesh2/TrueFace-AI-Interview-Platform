@@ -3,6 +3,7 @@ import {
   LIVEAVATAR_INTERVIEWER_IDS,
   resolveInterviewerAvatarId,
 } from "@/lib/liveavatar-interviewers";
+import { LIVE_INTERVIEW_QUESTION_FOCUS } from "@/lib/live-interview-focus";
 
 export async function POST(req: Request) {
   try {
@@ -15,16 +16,20 @@ export async function POST(req: Request) {
     let interviewer: string | undefined;
     let interviewMode: string | undefined;
     let profileContext: string | undefined;
+    let liveHiring = false;
     try {
       const body = (await req.json()) as {
         interviewer?: string;
         interviewMode?: string;
         /** Optional job + resume text; truncated server-side for API limits */
         profileContext?: string;
+        /** Company TrueFace live candidate link — real interview tone, interviewer Karen */
+        liveHiring?: boolean;
       };
       interviewer = body.interviewer;
       interviewMode = body.interviewMode;
       profileContext = body.profileContext;
+      liveHiring = Boolean(body.liveHiring);
     } catch {
       /* empty body */
     }
@@ -41,9 +46,16 @@ export async function POST(req: Request) {
     const behaviorLine =
       "If the candidate asks you to repeat or says something off-topic or unclear, respond naturally—restate or redirect—without empty thanks or pretending they answered when they have not.";
 
-    let personaPrompt = isBehavioral
-      ? `You are a Senior Engineering Manager conducting a behavioral mock interview. ${interviewTypeLine} ${behaviorLine}`
-      : `You are a Senior Engineering Manager conducting a technical mock interview. ${interviewTypeLine} ${behaviorLine}`;
+    let personaPrompt: string;
+    if (liveHiring) {
+      personaPrompt = isBehavioral
+        ? `You are Karen, a hiring manager conducting a real interview for a technical role (TrueFace verified employer session). This is not practice, not coaching, and not a demo. Your name is Karen—introduce yourself naturally. Never say "mock," "practice session," or describe STAR coaching. Never use bracket placeholders like [Candidate Name]; use a real name only if clearly provided in context, otherwise greet without a name. ${behaviorLine} ${LIVE_INTERVIEW_QUESTION_FOCUS}`
+        : `You are Karen, a hiring manager conducting a real technical hiring interview (TrueFace verified employer session). Not practice or training. Your name is Karen—introduce yourself naturally. Never say "mock" or "practice." Never use bracket placeholders for names. ${behaviorLine} ${LIVE_INTERVIEW_QUESTION_FOCUS}`;
+    } else {
+      personaPrompt = isBehavioral
+        ? `You are a Senior Engineering Manager conducting a behavioral mock interview. ${interviewTypeLine} ${behaviorLine} ${LIVE_INTERVIEW_QUESTION_FOCUS}`
+        : `You are a Senior Engineering Manager conducting a technical mock interview. ${interviewTypeLine} ${behaviorLine} ${LIVE_INTERVIEW_QUESTION_FOCUS}`;
+    }
 
     const ctx =
       typeof profileContext === "string" && profileContext.trim().length > 0

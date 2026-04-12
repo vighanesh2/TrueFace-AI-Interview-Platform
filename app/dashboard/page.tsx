@@ -5,12 +5,10 @@ import { lightPrimaryButton } from "@/lib/dashboard-light-theme";
 
 export default function DashboardHomePage() {
   return (
-    <div className="mx-auto max-w-4xl px-8 py-12 sm:px-10 sm:py-16">
-      <p className="text-2xl" aria-hidden>
-        👋
-      </p>
-      <h1 className="mt-4 text-3xl font-bold tracking-tight text-neutral-900 dark:text-neutral-100 sm:text-4xl">
-        Hello there! Welcome back.
+    <div className="mx-auto max-w-4xl px-5 py-8 sm:px-6 sm:py-10 lg:px-8 lg:py-12">
+      <h1 className="mt-2 text-3xl font-bold tracking-tight text-neutral-900 dark:text-neutral-100 sm:text-4xl">
+        Hello there! Welcome back.{" "}
+        <span aria-hidden>👋</span>
       </h1>
       <div className="mt-6 space-y-4 text-base leading-relaxed text-neutral-600 dark:text-neutral-400">
         <p>
@@ -34,19 +32,19 @@ export default function DashboardHomePage() {
         </p>
       </div>
 
-      <div className="mt-10 overflow-hidden rounded-2xl border border-neutral-200 bg-neutral-50 shadow-md dark:border-neutral-700 dark:bg-neutral-900/40 dark:shadow-neutral-950/50">
+      <div className="mx-auto mt-8 max-w-3xl overflow-hidden rounded-2xl border border-neutral-200 bg-neutral-50 shadow-md dark:border-neutral-700 dark:bg-neutral-900/40 dark:shadow-neutral-950/50 sm:mt-9">
         <Image
           src="/homepage.png"
           alt="Live mock interview: AI interviewer, subtitles, and meeting controls"
           width={1920}
           height={1080}
           className="h-auto w-full object-cover object-top"
-          sizes="(max-width: 896px) 100vw, 896px"
+          sizes="(max-width: 768px) 100vw, 768px"
           priority
         />
       </div>
 
-      <div className="mt-10 flex flex-wrap items-center gap-3">
+      <div className="mt-8 flex flex-wrap items-center gap-3 sm:mt-9">
         <Link
           href="/dashboard/interview"
           className={clsx(lightPrimaryButton, "inline-flex items-center justify-center")}

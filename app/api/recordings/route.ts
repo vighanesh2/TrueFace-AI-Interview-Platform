@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { ObjectId } from "mongodb";
 import { getSessionUser } from "@/lib/auth";
 import {
+  createLiveSessionRecording,
   createRecording,
   ensureRecordingIndexes,
   listRecordingsForUser,
@@ -40,7 +41,14 @@ export async function POST(req: Request) {
   if (!user) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
-  let body: { type?: string; source?: string };
+  let body: {
+    type?: string;
+    source?: string;
+    liveSessionId?: string;
+    candidateName?: string;
+    role?: string;
+    jobDescription?: string;
+  };
   try {
     body = await req.json();
   } catch {
@@ -50,14 +58,25 @@ export async function POST(req: Request) {
   if (!type) {
     return NextResponse.json({ error: "type must be technical or behavioral" }, { status: 400 });
   }
-  const source: RecordingSource =
-    body.source === "live_avatar" ? "live_avatar" : "text_chat";
   try {
     await ensureRecordingIndexes();
   } catch (e) {
     console.error("Recording indexes:", e);
   }
   const uid = new ObjectId(user.id);
+
+  if (typeof body.liveSessionId === "string" && body.liveSessionId.trim().length > 0) {
+    const { id, liveBumpToken } = await createLiveSessionRecording(uid, {
+      type: type as InterviewType,
+      liveSessionId: body.liveSessionId.trim(),
+      candidateName: typeof body.candidateName === "string" ? body.candidateName : undefined,
+      roleTitle: typeof body.role === "string" ? body.role : undefined,
+      jobDescription: typeof body.jobDescription === "string" ? body.jobDescription : undefined,
+    });
+    return NextResponse.json({ id: id.toString(), type, liveBumpToken }, { status: 201 });
+  }
+
+  const source: RecordingSource = body.source === "live_avatar" ? "live_avatar" : "text_chat";
   const id = await createRecording(uid, type as InterviewType, { source });
   const idStr = id.toString();
   return NextResponse.json(

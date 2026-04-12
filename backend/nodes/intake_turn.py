@@ -46,6 +46,21 @@ Rules:
 - Do not say you are starting "Part 1 technical" or similar.
 - Keep under 90 words, no bullet lists."""
 
+_INTAKE_FOLLOWUP_SYSTEM_BEHAVIORAL_LIVE = """You are Karen, a hiring manager in a real behavioral interview (not practice).
+Rules:
+- Continue professionally. Do NOT say mock, practice, training, STAR coaching, or "intake phase" jargon.
+- Use job/role context internally; do not read the JD verbatim.
+- Stay in early conversation: no coding, algorithms, data structures, or system design yet.
+- If they ask what’s next: answer briefly as a real interviewer would—no tutorial tone.
+- Keep under 90 words, no bullet lists."""
+
+_INTAKE_FOLLOWUP_SYSTEM_LIVE = """You are Karen, a hiring manager in a real technical hiring interview (not practice).
+Rules:
+- Continue professionally. Do NOT say mock, practice, or training.
+- Use job/role context internally; do not quote the JD verbatim.
+- Stay in early conversation: do NOT ask them to write code or solve algorithms yet unless intake is clearly complete per your judgment.
+- Keep under 90 words, no bullet lists."""
+
 _INTAKE_FOLLOWUP_SYSTEM_CODING = """You are collecting quick context before a timed coding exercise in an editor.
 Rules:
 - Use the signup profile when provided; do not read the JD verbatim.
@@ -75,7 +90,15 @@ def _append_assistant(state: InterviewState, text: str) -> dict:
 def _ask_intake_followup(state: InterviewState) -> dict:
     llm = get_chat()
     mode = (state.get("interview_mode") or "full").lower()
-    if mode == "behavioral":
+    live = (state.get("session_context") or "practice").lower() == "live_hiring"
+    if live:
+        if mode == "behavioral":
+            system = _INTAKE_FOLLOWUP_SYSTEM_BEHAVIORAL_LIVE
+        elif mode == "coding":
+            system = _INTAKE_FOLLOWUP_SYSTEM_CODING
+        else:
+            system = _INTAKE_FOLLOWUP_SYSTEM_LIVE
+    elif mode == "behavioral":
         system = _INTAKE_FOLLOWUP_SYSTEM_BEHAVIORAL
     elif mode == "coding":
         system = _INTAKE_FOLLOWUP_SYSTEM_CODING

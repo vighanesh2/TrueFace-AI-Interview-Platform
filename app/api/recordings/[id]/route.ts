@@ -5,6 +5,7 @@ import {
   bumpRecordingMessageCount,
   deleteRecording,
   getRecordingForUser,
+  removeVideoClipFromRecording,
   saveLiveAvatarTranscript,
   setRecordingCompleted,
   setRecordingMeetingVideo,
@@ -26,6 +27,7 @@ export async function GET(_req: Request, ctx: Ctx) {
   }
   const src: RecordingSource = rec.source ?? "text_chat";
   const msgs = rec.messages;
+  const clips = rec.clips ?? [];
   return NextResponse.json({
     id: rec._id.toString(),
     type: rec.type,
@@ -34,9 +36,10 @@ export async function GET(_req: Request, ctx: Ctx) {
     messageCount: rec.messageCount,
     source: src,
     messages: msgs ?? [],
+    meetingVideoUrl: rec.meetingVideoUrl ?? null,
+    clips,
     createdAt: rec.createdAt.toISOString(),
     updatedAt: rec.updatedAt.toISOString(),
-    meetingVideoUrl: rec.meetingVideoUrl ?? null,
   });
 }
 
@@ -49,6 +52,7 @@ export async function PATCH(req: Request, ctx: Ctx) {
   let body: {
     messageDelta?: number;
     complete?: boolean;
+    deleteClipUrl?: string;
     meetingVideoUrl?: string;
     saveTranscript?: boolean;
     messages?: unknown[];
@@ -58,7 +62,26 @@ export async function PATCH(req: Request, ctx: Ctx) {
   } catch {
     return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
   }
+
   const uid = new ObjectId(user.id);
+
+  if (body.deleteClipUrl) {
+    await removeVideoClipFromRecording(id, uid, body.deleteClipUrl);
+    const rec = await getRecordingForUser(id, uid);
+    if (!rec) {
+      return NextResponse.json({ error: "Not found" }, { status: 404 });
+    }
+    return NextResponse.json({
+      id: rec._id.toString(),
+      type: rec.type,
+      title: rec.title,
+      status: rec.status,
+      messageCount: rec.messageCount,
+      updatedAt: rec.updatedAt.toISOString(),
+      meetingVideoUrl: rec.meetingVideoUrl ?? null,
+    });
+  }
+
   if (body.saveTranscript === true && Array.isArray(body.messages)) {
     const msgs = body.messages.filter(
       (m: unknown) =>
@@ -79,16 +102,19 @@ export async function PATCH(req: Request, ctx: Ctx) {
       await setRecordingCompleted(id, uid);
     }
   }
+
   if (typeof body.meetingVideoUrl === "string" && body.meetingVideoUrl.startsWith("https://")) {
     const ok = await setRecordingMeetingVideo(id, uid, body.meetingVideoUrl);
     if (!ok) {
       return NextResponse.json({ error: "Not found" }, { status: 404 });
     }
   }
+
   const rec = await getRecordingForUser(id, uid);
   if (!rec) {
     return NextResponse.json({ error: "Not found" }, { status: 404 });
   }
+
   return NextResponse.json({
     id: rec._id.toString(),
     type: rec.type,

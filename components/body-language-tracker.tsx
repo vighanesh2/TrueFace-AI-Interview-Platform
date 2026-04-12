@@ -10,8 +10,8 @@ const ANALYSIS_H = 48;
 const FRAME_MS = 1000 / 30;
 
 /**
- * Pixel-diff motion analysis on an existing &lt;video&gt; (e.g. interview PiP).
- * Caller must render a hidden &lt;canvas ref={canvasRef} /&gt; next to the video.
+ * Pixel-diff motion analysis on an existing <video> (e.g. interview PiP).
+ * Caller must render a hidden <canvas ref={canvasRef} /> next to the video.
  */
 export function useBodyLanguageAnalysis(
   videoRef: RefObject<HTMLVideoElement | null>,
@@ -133,51 +133,7 @@ export function useBodyLanguageAnalysis(
   return { motionScore, warnings, canvasRef };
 }
 
-/** Optional HUD for interview PiP — motion bar + warning (caller supplies scores from the hook). */
-export function BodyLanguagePipHud({
-  motionScore,
-  warnings,
-  className,
-}: {
-  motionScore: number;
-  warnings: string[];
-  className?: string;
-}) {
-  return (
-    <div
-      className={clsx(
-        "pointer-events-none absolute inset-x-0 bottom-0 bg-linear-to-t from-black/85 to-transparent px-2 pb-1.5 pt-4",
-        className
-      )}
-    >
-      <div className="flex items-center justify-between gap-2 text-[10px] font-medium text-white/95">
-        <span className="text-white/70">Motion</span>
-        <span
-          className={clsx(
-            "font-mono tabular-nums",
-            motionScore > 40 ? "text-red-300" : motionScore > 20 ? "text-amber-300" : "text-emerald-300"
-          )}
-        >
-          {motionScore}%
-        </span>
-      </div>
-      <div className="mt-1 h-1 w-full overflow-hidden rounded-full bg-white/15">
-        <div
-          className={clsx(
-            "h-full rounded-full transition-all duration-100",
-            motionScore > 40 ? "bg-red-500" : motionScore > 20 ? "bg-amber-500" : "bg-emerald-500"
-          )}
-          style={{ width: `${Math.min(100, motionScore)}%` }}
-        />
-      </div>
-      {warnings.length > 0 && (
-        <p className="mt-1.5 text-center text-[10px] font-semibold text-red-300 drop-shadow-sm">
-          ⚠️ {warnings[0]}
-        </p>
-      )}
-    </div>
-  );
-}
+export { BodyLanguagePipHud } from "@/components/body-language-pip-hud";
 
 /** Standalone demo card with its own camera stream. */
 export function BodyLanguageTracker() {
@@ -263,7 +219,7 @@ export function BodyLanguageTracker() {
               />
             </div>
             {warnings.length > 0 && (
-              <div className="mt-4 rounded border border-red-800 bg-red-900/30 p-3 text-xs font-semibold text-red-300 animate-pulse">
+              <div className="mt-4 animate-pulse rounded border border-red-800 bg-red-900/30 p-3 text-xs font-semibold text-red-300">
                 ⚠️ {warnings[0]}
               </div>
             )}

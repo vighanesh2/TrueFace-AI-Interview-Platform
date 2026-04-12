@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
+import { SiteHeader } from "@/components/site-header";
 import { ThemeProvider } from "@/components/theme-provider";
 import { ThemeScript } from "@/components/theme-script";
 import "./globals.css";
@@ -32,7 +33,10 @@ export default function RootLayout({
     >
       <body className="flex min-h-full flex-col" suppressHydrationWarning>
         <ThemeScript />
-        <ThemeProvider>{children}</ThemeProvider>
+        <ThemeProvider>
+          <SiteHeader />
+          {children}
+        </ThemeProvider>
       </body>
     </html>
   );

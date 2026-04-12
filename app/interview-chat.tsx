@@ -103,7 +103,7 @@ export default function InterviewChat({
           <h2 className="text-sm font-semibold text-white/95">Mock interview recording</h2>
           <p className="mt-1 text-xs text-white/45">Video from your live avatar session.</p>
           <video
-            className="mt-4 w-full max-h-[min(50vh,420px)] rounded-lg border border-white/10 bg-black object-contain"
+            className="mt-4 max-h-[min(50vh,420px)] w-full rounded-lg border border-white/10 bg-black object-contain"
             controls
             playsInline
             preload="metadata"

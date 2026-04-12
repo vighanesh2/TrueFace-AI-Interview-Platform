@@ -16,7 +16,8 @@ import { useCallback, useEffect, useRef, useState, type ReactNode } from "react"
 import { lightPrimaryButton } from "@/lib/dashboard-light-theme";
 import { buildInterviewKnowledge } from "@/lib/interview-context";
 import type { LiveavatarInterviewerGender } from "@/lib/liveavatar-interviewers";
-import { BodyLanguagePipHud, useBodyLanguageAnalysis } from "@/components/body-language-tracker";
+import { BodyLanguagePipHud } from "@/components/body-language-pip-hud";
+import { useBodyLanguageAnalysis } from "@/components/body-language-tracker";
 import {
   CodeEditorPanel,
   type KeystrokeSummary,
@@ -458,6 +459,22 @@ export function LiveAvatarInterview() {
   const toolbarMoveDragRef = useRef<{ startX: number; startY: number; tx: number; ty: number } | null>(null);
   const answerInputRef = useRef<HTMLInputElement | null>(null);
 
+  // TrueFace ML Engine
+  const ML_ENGINE_URL = "http://localhost:8001";
+  const sessionParam = searchParams.get("session");
+  const candidateId = useRef(sessionParam ? `candidate_${sessionParam}` : `candidate_${Date.now()}`);
+  const isLiveInterview = Boolean(sessionParam);
+  const [mlConnected, setMlConnected] = useState(false);
+  const [mlScores, setMlScores] = useState<{
+    final_score: number;
+    risk_level: string;
+    signal_breakdown: Record<string, { score: number; label: string }>;
+  } | null>(null);
+  const [monitorCopied, setMonitorCopied] = useState(false);
+  const [monitorUrl, setMonitorUrl] = useState("");
+  const frameIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+
   const recordingIdRef = useRef<string | null>(null);
   const recordingSavedRef = useRef(false);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
@@ -465,7 +482,6 @@ export function LiveAvatarInterview() {
   const recordedMimeRef = useRef("");
   const recorderMicStreamRef = useRef<MediaStream | null>(null);
   const sessionWebmRecorderStartedRef = useRef(false);
-
 
   const codingBrain = useCodingInterviewBrain();
   const codingBrainRef = useRef(codingBrain);
@@ -481,7 +497,6 @@ export function LiveAvatarInterview() {
   const meetingRecordMixReleaseRef = useRef<(() => void) | null>(null);
 
   const [meetingRecordState, setMeetingRecordState] = useState<"idle" | "recording" | "uploading">("idle");
-
   const [pipWidth, setPipWidthState] = useState(200);
   const [pipTranslate, setPipTranslate] = useState({ x: 0, y: 0 });
   const [toolbarTranslate, setToolbarTranslate] = useState({ x: 0, y: 0 });
@@ -626,6 +641,60 @@ export function LiveAvatarInterview() {
     } finally {
       setResumeParsing(false);
     }
+  }, []);
+
+
+  // TrueFace ML Engine effects
+  useEffect(() => {
+    const init = async () => {
+      try {
+        const res = await fetch(`${ML_ENGINE_URL}/session/start?candidate_id=${candidateId.current}`, { method: "POST" });
+        if (res.ok) setMlConnected(true);
+      } catch {}
+    };
+    init();
+  }, []);
+
+  useEffect(() => {
+    const fetchScores = async () => {
+      try {
+        const res = await fetch(`${ML_ENGINE_URL}/session/report?candidate_id=${candidateId.current}&candidate_name=Candidate`, { method: "POST" });
+        if (res.ok) {
+          const data = await res.json();
+          if (data?.final_score !== undefined) setMlScores(data);
+        }
+      } catch {}
+    };
+    fetchScores();
+    const interval = setInterval(fetchScores, 5000);
+    return () => clearInterval(interval);
+  }, []);
+
+  useEffect(() => {
+    if (!sessionActive) return;
+    const canvas = document.createElement("canvas");
+    canvasRef.current = canvas;
+    frameIntervalRef.current = setInterval(async () => {
+      if (!userVideoRef.current || !canvasRef.current) return;
+      const ctx = canvasRef.current.getContext("2d");
+      if (!ctx) return;
+      canvasRef.current.width = 320;
+      canvasRef.current.height = 240;
+      ctx.drawImage(userVideoRef.current, 0, 0, 320, 240);
+      canvasRef.current.toBlob(async (blob) => {
+        if (!blob) return;
+        const formData = new FormData();
+        formData.append("file", blob, "frame.jpg");
+        try {
+          await fetch(`${ML_ENGINE_URL}/analyze/frame?candidate_id=${candidateId.current}`, { method: "POST", body: formData });
+        } catch {}
+      }, "image/jpeg", 0.8);
+    }, 3000);
+    return () => { if (frameIntervalRef.current) clearInterval(frameIntervalRef.current); };
+  }, [sessionActive]);
+
+  useEffect(() => {
+    setMonitorUrl(`${window.location.origin}/monitor/${candidateId.current}`);
   }, []);
 
   const bodyLanguage = useBodyLanguageAnalysis(userVideoRef, sessionActive && cameraOn);
@@ -1483,6 +1552,15 @@ export function LiveAvatarInterview() {
       "h-screen max-h-screen w-screen max-w-none rounded-none border-0 shadow-none lg:min-h-0"
   );
 
+  const getBarColor = (score: number) =>
+    score < 0.35 ? "bg-green-500" : score < 0.55 ? "bg-yellow-500" : "bg-red-500";
+  const getRiskColor = (risk: string) =>
+    risk === "AUTHENTIC" || risk === "LOW RISK"
+      ? "text-green-400"
+      : risk === "MEDIUM RISK"
+        ? "text-yellow-400"
+        : "text-red-400";
+
   const sendDisabled =
     isChatting ||
     (interviewMode === "technical" &&
@@ -1502,6 +1580,7 @@ export function LiveAvatarInterview() {
         </h1>
       </div>
 
+      <div className="flex min-h-0 flex-1 flex-col gap-4 lg:flex-row lg:items-stretch lg:gap-6">
       <div ref={stageContainerRef} className={meetingShell}>
         {interviewMode === "technical" &&
           sessionActive &&
@@ -1541,62 +1620,14 @@ export function LiveAvatarInterview() {
             )}
           >
           <div className="absolute right-5 top-3 z-20 flex items-center gap-2 sm:right-6">
-            {!sessionActive ? (
-              <Listbox
-                value={interviewMode}
-                onChange={(v: "behavioral" | "technical") => setInterviewMode(v)}
-                disabled={isAvatarStarting}
-              >
-                <ListboxButton
-                  className={clsx(
-                    "inline-flex items-center gap-1 rounded-lg border px-2 py-1.5 text-left text-xs font-medium text-white/95 shadow-lg backdrop-blur-sm transition-colors",
-                    "border-white/20 bg-neutral-900/90 hover:bg-neutral-800/95",
-                    "focus:outline-none focus-visible:ring-2 focus-visible:ring-white/40",
-                    isAvatarStarting && "cursor-not-allowed opacity-50"
-                  )}
-                  aria-label="Interview mode"
-                >
-                  <span className="whitespace-nowrap">{interviewMode === "behavioral" ? "Behavioral" : "Technical"}</span>
-                  <svg className="h-3 w-3 shrink-0 text-white/60" viewBox="0 0 20 20" fill="currentColor" aria-hidden>
-                    <path
-                      fillRule="evenodd"
-                      d="M5.23 7.21a.75.75 0 011.06.02L10 11.168l3.71-3.94a.75.75 0 111.08 1.04l-4.25 4.5a.75.75 0 01-1.08 0l-4.25-4.5a.75.75 0 01.02-1.06z"
-                      clipRule="evenodd"
-                    />
-                  </svg>
-                </ListboxButton>
-                <ListboxOptions
-                  anchor="bottom end"
-                  portal
-                  modal={false}
-                  className={clsx(
-                    "z-[100] min-w-36 rounded-lg border py-0.5 shadow-xl [--anchor-gap:6px]",
-                    "border-white/15 bg-neutral-950/95 text-white backdrop-blur-md",
-                    "focus:outline-none"
-                  )}
-                >
-                  <ListboxOption
-                    value="behavioral"
-                    className="cursor-pointer px-3 py-1.5 text-xs text-white/95 data-focus:bg-white/10"
-                  >
-                    Behavioral
-                  </ListboxOption>
-                  <ListboxOption
-                    value="technical"
-                    className="cursor-pointer px-3 py-1.5 text-xs text-white/95 data-focus:bg-white/10"
-                  >
-                    Technical
-                  </ListboxOption>
-                </ListboxOptions>
-              </Listbox>
-            ) : (
+            {sessionActive ? (
               <span
                 className="rounded-lg border border-white/20 bg-black/50 px-2 py-1.5 text-[10px] font-semibold uppercase tracking-wide text-white/90 backdrop-blur-sm"
                 title="Mode is fixed for this session"
               >
                 {interviewMode === "behavioral" ? "Behavioral" : "Technical"}
               </span>
-            )}
+            ) : null}
             {!sessionActive && (
               <button
                 type="button"
@@ -1623,167 +1654,228 @@ export function LiveAvatarInterview() {
           </video>
 
           {!sessionActive && (
-            <div className="absolute inset-0 z-10 flex flex-col items-center overflow-y-auto overflow-x-hidden bg-neutral-950 px-4 py-6">
-              <div className="flex w-full max-w-lg flex-col items-stretch gap-5 sm:max-w-xl">
-                <div className="rounded-xl border border-white/10 bg-neutral-900/50 p-4 text-left">
-                  <p className="text-sm font-semibold text-neutral-100">Role context (optional)</p>
-                  <p className="mt-1 text-xs text-neutral-500">
-                    Add any details you want—the avatar and interviewer use them when provided.{" "}
-                    <span className="text-neutral-400">
-                      Technical mode uses the same coding engine as Code Interview (editor + tests) with this dashboard UI.
-                    </span>{" "}
-                    Nothing here is required to start.
-                  </p>
-                  <div className="mt-4 space-y-3">
-                    <div>
-                      <label htmlFor="prejoin-job-title" className="mb-1 block text-xs font-medium text-neutral-400">
-                        Job title <span className="text-neutral-600">(optional)</span>
-                      </label>
-                      <input
-                        id="prejoin-job-title"
-                        type="text"
-                        value={jobTitle}
-                        onChange={(e) => setJobTitle(e.target.value)}
+            <div className="absolute inset-0 z-10 overflow-y-auto overflow-x-hidden bg-neutral-950 px-4 py-6 lg:px-6">
+              <div className="mx-auto flex w-full max-w-6xl flex-col gap-6 lg:flex-row lg:items-stretch lg:gap-8">
+                {/* Left: role context — wide column, stretches with interviewer side on desktop */}
+                <div className="flex w-full shrink-0 flex-col items-stretch lg:sticky lg:top-6 lg:w-96 xl:w-[28rem]">
+                  <div className="flex h-full min-h-[min(520px,62vh)] w-full max-w-sm flex-col rounded-lg border border-white/10 bg-neutral-900/50 px-5 py-5 text-left shadow-sm xl:max-w-none">
+                    <p className="text-center text-sm font-semibold text-neutral-100">Role context (optional)</p>
+                    <p className="mx-auto mt-2 max-w-[40ch] text-center text-xs leading-relaxed text-neutral-500">
+                      Add any details you want—the avatar and interviewer use them when provided. Choose behavioral or
+                      technical below.{" "}
+                      <span className="text-neutral-400">
+                        Technical mode uses the same coding engine as Code Interview (editor + tests) with this dashboard
+                        UI.
+                      </span>{" "}
+                      Nothing here is required to start.
+                    </p>
+                    <div className="mt-4 flex justify-center">
+                      <Listbox
+                        value={interviewMode}
+                        onChange={(v: "behavioral" | "technical") => setInterviewMode(v)}
                         disabled={isAvatarStarting}
-                        placeholder="e.g. Software Engineer Intern"
-                        className={prejoinFieldClass}
-                        autoComplete="organization-title"
-                      />
+                      >
+                        <ListboxButton
+                          className={clsx(
+                            "inline-flex min-w-[10.5rem] items-center justify-between gap-2 rounded-lg border px-3 py-2 text-left text-xs font-medium text-neutral-100 transition-colors",
+                            "border-white/15 bg-neutral-900/90 hover:bg-neutral-800/95",
+                            "focus:outline-none focus-visible:ring-2 focus-visible:ring-white/35",
+                            isAvatarStarting && "cursor-not-allowed opacity-50"
+                          )}
+                          aria-label="Interview mode"
+                        >
+                          <span className="whitespace-nowrap">
+                            {interviewMode === "behavioral" ? "Behavioral" : "Technical"}
+                          </span>
+                          <svg className="h-3 w-3 shrink-0 text-neutral-400" viewBox="0 0 20 20" fill="currentColor" aria-hidden>
+                            <path
+                              fillRule="evenodd"
+                              d="M5.23 7.21a.75.75 0 011.06.02L10 11.168l3.71-3.94a.75.75 0 111.08 1.04l-4.25 4.5a.75.75 0 01-1.08 0l-4.25-4.5a.75.75 0 01.02-1.06z"
+                              clipRule="evenodd"
+                            />
+                          </svg>
+                        </ListboxButton>
+                        <ListboxOptions
+                          anchor="bottom start"
+                          portal
+                          modal={false}
+                          className={clsx(
+                            "z-[100] min-w-[10.5rem] rounded-lg border py-0.5 shadow-xl [--anchor-gap:6px]",
+                            "border-white/15 bg-neutral-950/95 text-white backdrop-blur-md",
+                            "focus:outline-none"
+                          )}
+                        >
+                          <ListboxOption
+                            value="behavioral"
+                            className="cursor-pointer px-3 py-1.5 text-xs text-white/95 data-focus:bg-white/10"
+                          >
+                            Behavioral
+                          </ListboxOption>
+                          <ListboxOption
+                            value="technical"
+                            className="cursor-pointer px-3 py-1.5 text-xs text-white/95 data-focus:bg-white/10"
+                          >
+                            Technical
+                          </ListboxOption>
+                        </ListboxOptions>
+                      </Listbox>
                     </div>
-                    <div>
-                      <label htmlFor="prejoin-company" className="mb-1 block text-xs font-medium text-neutral-400">
-                        Company <span className="text-neutral-600">(optional)</span>
-                      </label>
-                      <input
-                        id="prejoin-company"
-                        type="text"
-                        value={company}
-                        onChange={(e) => setCompany(e.target.value)}
-                        disabled={isAvatarStarting}
-                        placeholder="e.g. Acme Corp"
-                        className={prejoinFieldClass}
-                        autoComplete="organization"
-                      />
-                    </div>
-                    <div>
-                      <label htmlFor="prejoin-jd" className="mb-1 block text-xs font-medium text-neutral-400">
-                        Job description <span className="text-neutral-600">(optional)</span>
-                      </label>
-                      <textarea
-                        id="prejoin-jd"
-                        value={jobDescription}
-                        onChange={(e) => setJobDescription(e.target.value)}
-                        disabled={isAvatarStarting}
-                        placeholder="Paste the role summary, requirements, or what you want to practice for."
-                        rows={4}
-                        className={clsx(prejoinFieldClass, "resize-y min-h-[88px]")}
-                      />
-                    </div>
-                    <div>
-                      <span className="mb-1 block text-xs font-medium text-neutral-400">
-                        Resume (PDF) <span className="text-neutral-600">(optional)</span>
-                      </span>
-                      <input
-                        type="file"
-                        accept="application/pdf,.pdf"
-                        disabled={isAvatarStarting || resumeParsing}
-                        onChange={(e) => void handleResumeFile(e.target.files?.[0])}
-                        className="block w-full text-xs text-neutral-400 file:mr-2 file:rounded-md file:border-0 file:bg-white/10 file:px-2 file:py-1.5 file:text-xs file:text-neutral-200"
-                      />
-                      {resumeParsing ? (
-                        <p className="mt-1 text-xs text-neutral-500">Extracting text from PDF…</p>
-                      ) : resumeLabel ? (
-                        <p className="mt-1 text-xs text-emerald-400/90">
-                          Loaded: {resumeLabel} ({resumeText.length.toLocaleString()} characters)
-                        </p>
-                      ) : null}
-                      {resumeError ? <p className="mt-1 text-xs text-red-400">{resumeError}</p> : null}
+                    <div className="mt-4 flex flex-1 flex-col space-y-4">
+                      <div>
+                        <label htmlFor="prejoin-job-title" className="mb-1.5 block text-xs font-medium text-neutral-400">
+                          Job title <span className="text-neutral-600">(optional)</span>
+                        </label>
+                        <input
+                          id="prejoin-job-title"
+                          type="text"
+                          value={jobTitle}
+                          onChange={(e) => setJobTitle(e.target.value)}
+                          disabled={isAvatarStarting}
+                          placeholder="e.g. Software Engineer Intern"
+                          className={prejoinFieldClass}
+                          autoComplete="organization-title"
+                        />
+                      </div>
+                      <div>
+                        <label htmlFor="prejoin-company" className="mb-1.5 block text-xs font-medium text-neutral-400">
+                          Company <span className="text-neutral-600">(optional)</span>
+                        </label>
+                        <input
+                          id="prejoin-company"
+                          type="text"
+                          value={company}
+                          onChange={(e) => setCompany(e.target.value)}
+                          disabled={isAvatarStarting}
+                          placeholder="e.g. Acme Corp"
+                          className={prejoinFieldClass}
+                          autoComplete="organization"
+                        />
+                      </div>
+                      <div className="flex min-h-0 flex-1 flex-col">
+                        <label htmlFor="prejoin-jd" className="mb-1.5 block text-xs font-medium text-neutral-400">
+                          Job description <span className="text-neutral-600">(optional)</span>
+                        </label>
+                        <textarea
+                          id="prejoin-jd"
+                          value={jobDescription}
+                          onChange={(e) => setJobDescription(e.target.value)}
+                          disabled={isAvatarStarting}
+                          placeholder="Paste the role summary, requirements, or what you want to practice for."
+                          rows={6}
+                          className={clsx(prejoinFieldClass, "min-h-[132px] flex-1 resize-y")}
+                        />
+                      </div>
+                      <div>
+                        <span className="mb-1.5 block text-xs font-medium text-neutral-400">
+                          Resume (PDF) <span className="text-neutral-600">(optional)</span>
+                        </span>
+                        <input
+                          type="file"
+                          accept="application/pdf,.pdf"
+                          disabled={isAvatarStarting || resumeParsing}
+                          onChange={(e) => void handleResumeFile(e.target.files?.[0])}
+                          className="block w-full text-xs text-neutral-400 file:mr-2 file:rounded-md file:border-0 file:bg-white/10 file:px-2 file:py-1.5 file:text-xs file:text-neutral-200"
+                        />
+                        {resumeParsing ? (
+                          <p className="mt-1 text-xs text-neutral-500">Extracting text from PDF…</p>
+                        ) : resumeLabel ? (
+                          <p className="mt-1 text-xs text-emerald-400/90">
+                            Loaded: {resumeLabel} ({resumeText.length.toLocaleString()} characters)
+                          </p>
+                        ) : null}
+                        {resumeError ? <p className="mt-1 text-xs text-red-400">{resumeError}</p> : null}
+                      </div>
                     </div>
                   </div>
                 </div>
 
-                <div className="text-center">
-                  <p className="text-sm font-medium text-neutral-200">Choose your interviewer</p>
-                  <p className="mt-1 text-xs text-neutral-500">Then start the session.</p>
+                {/* Right: interviewer + start */}
+                <div className="flex min-w-0 flex-1 flex-col items-center">
+                  <div className="text-center">
+                    <p className="text-sm font-medium text-neutral-200">Choose your interviewer</p>
+                    <p className="mt-1 text-xs text-neutral-500">Then start the session.</p>
+                  </div>
+                  <fieldset className="mt-2 flex w-full max-w-lg flex-col gap-3 sm:max-w-xl">
+                    <legend className="sr-only">Interviewer appearance</legend>
+                    <div className="grid grid-cols-2 gap-3 sm:gap-4" role="group" aria-label="Interviewer">
+                      <button
+                        type="button"
+                        onClick={() => setInterviewerGender("male")}
+                        aria-pressed={interviewerGender === "male"}
+                        aria-label="Male interviewer"
+                        className={clsx(
+                          "flex flex-col overflow-hidden rounded-xl border-2 text-left outline-none transition-all focus-visible:ring-2 focus-visible:ring-white focus-visible:ring-offset-2 focus-visible:ring-offset-neutral-950",
+                          interviewerGender === "male"
+                            ? "border-white shadow-lg shadow-white/10 ring-2 ring-white/40"
+                            : "border-neutral-600 opacity-90 hover:border-neutral-400 hover:opacity-100"
+                        )}
+                      >
+                        <div className="relative aspect-3/4 w-full bg-neutral-800">
+                          <Image
+                            src="/male.png"
+                            alt="Male interviewer preview"
+                            fill
+                            className="object-cover object-top"
+                            sizes="(max-width: 640px) 42vw, 200px"
+                            priority
+                          />
+                        </div>
+                        <span
+                          className={clsx(
+                            "px-2 py-2.5 text-center text-sm font-semibold sm:py-3",
+                            interviewerGender === "male" ? "bg-white text-neutral-900" : "bg-neutral-900 text-neutral-200"
+                          )}
+                        >
+                          Guy
+                        </span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setInterviewerGender("female")}
+                        aria-pressed={interviewerGender === "female"}
+                        aria-label="Female interviewer"
+                        className={clsx(
+                          "flex flex-col overflow-hidden rounded-xl border-2 text-left outline-none transition-all focus-visible:ring-2 focus-visible:ring-white focus-visible:ring-offset-2 focus-visible:ring-offset-neutral-950",
+                          interviewerGender === "female"
+                            ? "border-white shadow-lg shadow-white/10 ring-2 ring-white/40"
+                            : "border-neutral-600 opacity-90 hover:border-neutral-400 hover:opacity-100"
+                        )}
+                      >
+                        <div className="relative aspect-3/4 w-full bg-neutral-800">
+                          <Image
+                            src="/female.png"
+                            alt="Female interviewer preview"
+                            fill
+                            className="object-cover object-top"
+                            sizes="(max-width: 640px) 42vw, 200px"
+                            priority
+                          />
+                        </div>
+                        <span
+                          className={clsx(
+                            "px-2 py-2.5 text-center text-sm font-semibold sm:py-3",
+                            interviewerGender === "female"
+                              ? "bg-white text-neutral-900"
+                              : "bg-neutral-900 text-neutral-200"
+                          )}
+                        >
+                          Girl
+                        </span>
+                      </button>
+                    </div>
+                  </fieldset>
+                  <p className="mt-4 text-center text-sm text-neutral-400">Video off until you connect.</p>
+                  <Button
+                    type="button"
+                    onClick={() => void startAvatarSession()}
+                    disabled={isAvatarStarting || resumeParsing}
+                    className={clsx(lightPrimaryButton, "mx-auto mt-2")}
+                    title={resumeParsing ? "Wait for PDF text extraction to finish" : undefined}
+                  >
+                    {isAvatarStarting ? "Starting avatar…" : "Start interview"}
+                  </Button>
                 </div>
               </div>
-              <fieldset className="mt-2 flex w-full max-w-lg flex-col gap-3 sm:max-w-xl">
-                <legend className="sr-only">Interviewer appearance</legend>
-                <div className="grid grid-cols-2 gap-3 sm:gap-4" role="group" aria-label="Interviewer">
-                  <button
-                    type="button"
-                    onClick={() => setInterviewerGender("male")}
-                    aria-pressed={interviewerGender === "male"}
-                    aria-label="Male interviewer"
-                    className={clsx(
-                      "flex flex-col overflow-hidden rounded-xl border-2 text-left transition-all outline-none focus-visible:ring-2 focus-visible:ring-white focus-visible:ring-offset-2 focus-visible:ring-offset-neutral-950",
-                      interviewerGender === "male"
-                        ? "border-white shadow-lg shadow-white/10 ring-2 ring-white/40"
-                        : "border-neutral-600 opacity-90 hover:border-neutral-400 hover:opacity-100"
-                    )}
-                  >
-                    <div className="relative aspect-3/4 w-full bg-neutral-800">
-                      <Image
-                        src="/male.png"
-                        alt="Male interviewer preview"
-                        fill
-                        className="object-cover object-top"
-                        sizes="(max-width: 640px) 42vw, 200px"
-                        priority
-                      />
-                    </div>
-                    <span
-                      className={clsx(
-                        "px-2 py-2.5 text-center text-sm font-semibold sm:py-3",
-                        interviewerGender === "male" ? "bg-white text-neutral-900" : "bg-neutral-900 text-neutral-200"
-                      )}
-                    >
-                      Guy
-                    </span>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setInterviewerGender("female")}
-                    aria-pressed={interviewerGender === "female"}
-                    aria-label="Female interviewer"
-                    className={clsx(
-                      "flex flex-col overflow-hidden rounded-xl border-2 text-left transition-all outline-none focus-visible:ring-2 focus-visible:ring-white focus-visible:ring-offset-2 focus-visible:ring-offset-neutral-950",
-                      interviewerGender === "female"
-                        ? "border-white shadow-lg shadow-white/10 ring-2 ring-white/40"
-                        : "border-neutral-600 opacity-90 hover:border-neutral-400 hover:opacity-100"
-                    )}
-                  >
-                    <div className="relative aspect-3/4 w-full bg-neutral-800">
-                      <Image
-                        src="/female.png"
-                        alt="Female interviewer preview"
-                        fill
-                        className="object-cover object-top"
-                        sizes="(max-width: 640px) 42vw, 200px"
-                        priority
-                      />
-                    </div>
-                    <span
-                      className={clsx(
-                        "px-2 py-2.5 text-center text-sm font-semibold sm:py-3",
-                        interviewerGender === "female" ? "bg-white text-neutral-900" : "bg-neutral-900 text-neutral-200"
-                      )}
-                    >
-                      Girl
-                    </span>
-                  </button>
-                </div>
-              </fieldset>
-              <p className="mt-4 text-center text-sm text-neutral-400">Video off until you connect.</p>
-              <Button
-                type="button"
-                onClick={() => void startAvatarSession()}
-                disabled={isAvatarStarting || resumeParsing}
-                className={clsx(lightPrimaryButton, "mx-auto mt-2")}
-                title={resumeParsing ? "Wait for PDF text extraction to finish" : undefined}
-              >
-                {isAvatarStarting ? "Starting avatar…" : "Start interview"}
-              </Button>
             </div>
           )}
 
@@ -2225,6 +2317,73 @@ export function LiveAvatarInterview() {
             </div>
           </div>
         )}
+      </div>
+
+      {isLiveInterview ? (
+      <aside className="flex w-full shrink-0 flex-col gap-4 lg:w-72">
+        <div className="rounded-xl border border-cyan-800/80 bg-neutral-900 p-4 dark:border-cyan-800">
+          <h3 className="mb-2 text-xs font-bold uppercase tracking-wider text-cyan-400">Company Monitor</h3>
+          <p className="mb-2 text-xs text-neutral-400">Share with interviewer:</p>
+          <div className="mb-2 break-all font-mono text-xs text-cyan-300">{monitorUrl || "…"}</div>
+          <button
+            type="button"
+            onClick={() => {
+              if (!monitorUrl) return;
+              void navigator.clipboard.writeText(monitorUrl);
+              setMonitorCopied(true);
+              window.setTimeout(() => setMonitorCopied(false), 2000);
+            }}
+            className="w-full rounded px-3 py-1.5 text-xs text-white transition-colors bg-cyan-800 hover:bg-cyan-700"
+          >
+            {monitorCopied ? "Copied!" : "Copy link"}
+          </button>
+        </div>
+        <div className="rounded-xl border border-neutral-700 bg-neutral-900 p-4">
+          <div className="mb-3 flex items-center justify-between">
+            <h3 className="text-xs font-bold uppercase tracking-wider text-neutral-400">TrueFace AI</h3>
+            <span
+              className={clsx(
+                "rounded-full px-2 py-0.5 text-xs",
+                mlConnected ? "bg-green-900 text-green-400" : "bg-neutral-800 text-neutral-500"
+              )}
+            >
+              {mlConnected ? "● LIVE" : "● OFFLINE"}
+            </span>
+          </div>
+          {mlScores ? (
+            <>
+              <div className="mb-3 rounded-lg bg-neutral-800 py-3 text-center">
+                <div className="text-4xl font-bold text-white">{Math.round((1 - mlScores.final_score) * 100)}%</div>
+                <div className="mt-1 text-xs text-neutral-400">Authenticity</div>
+                <div className={clsx("mt-1 text-xs font-bold", getRiskColor(mlScores.risk_level))}>
+                  {mlScores.risk_level}
+                </div>
+              </div>
+              <div className="flex flex-col gap-2">
+                {Object.entries(mlScores.signal_breakdown).map(([key, val]) => (
+                  <div key={key}>
+                    <div className="mb-0.5 flex justify-between text-xs">
+                      <span className="capitalize text-neutral-400">{key.replace(/_/g, " ")}</span>
+                      <span className="text-neutral-500">{val.label}</span>
+                    </div>
+                    <div className="h-1.5 w-full rounded-full bg-neutral-800">
+                      <div
+                        className={clsx("h-1.5 rounded-full transition-all duration-700", getBarColor(val.score))}
+                        style={{ width: `${val.score * 100}%` }}
+                      />
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </>
+          ) : (
+            <div className="py-6 text-center text-xs text-neutral-500">
+              {mlConnected ? "Analyzing…" : "Start interview to begin"}
+            </div>
+          )}
+        </div>
+      </aside>
+      ) : null}
       </div>
     </div>
   );
