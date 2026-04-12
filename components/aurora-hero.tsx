@@ -32,36 +32,31 @@ export function AuroraHero() {
       className="relative grid min-h-screen place-content-center overflow-hidden bg-gray-950 px-4 py-24 text-gray-200"
     >
       <div className="relative z-10 flex flex-col items-center">
-        <span className="mb-1.5 inline-block rounded-full bg-gray-600/50 px-3 py-1.5 text-sm">TRUEFACE</span>
-        <h1 className="max-w-3xl bg-gradient-to-br from-white to-gray-400 bg-clip-text text-center text-3xl font-medium leading-tight text-transparent sm:text-5xl sm:leading-tight md:text-7xl md:leading-tight">
+        <span className="mb-1.5 inline-block rounded-full bg-gray-600/50 px-3 py-1.5 text-sm">
+          TRUEFACE
+        </span>
+        <h1 className="max-w-4xl bg-linear-to-br from-white to-gray-400 bg-clip-text text-center text-3xl font-medium leading-tight text-transparent sm:text-5xl sm:leading-tight md:text-7xl md:leading-tight">
           Interview the Real You.
         </h1>
-        <p className="my-6 max-w-xl text-center text-base leading-relaxed text-gray-300 md:text-lg md:leading-relaxed">
-          AI mock interviews and authenticity signals that measure skill, not scripts—technical depth and behavioral
-          rounds in one workspace.
+        <p className="my-6 max-w-2xl text-center text-base leading-relaxed text-gray-300 md:text-lg md:leading-relaxed">
+          AI-powered mock interviews and fraud detection that measure skill, reveal authenticity, and make hiring truly
+          trustworthy.
         </p>
 
         <motion.div
           style={{ border, boxShadow }}
           whileHover={{ scale: 1.015 }}
           whileTap={{ scale: 0.985 }}
-          className="group relative w-fit rounded-full"
+          className="w-fit rounded-full"
         >
           <Link
             href="/register"
-            className="relative flex w-fit items-center gap-1.5 rounded-full bg-gray-950/10 px-4 py-2 text-gray-50 transition-colors hover:bg-gray-950/50"
+            className="group relative flex w-full items-center gap-1.5 rounded-full bg-gray-950/40 px-5 py-2.5 text-gray-50 transition-colors hover:bg-gray-950/70"
           >
             Get started
             <FiArrowRight className="transition-transform group-hover:-rotate-45 group-active:-rotate-12" />
           </Link>
         </motion.div>
-
-        <p className="mt-6 text-center text-sm text-gray-500">
-          Already have an account?{" "}
-          <Link href="/login" className="font-medium text-gray-300 underline-offset-2 hover:text-white hover:underline">
-            Log in
-          </Link>
-        </p>
       </div>
 
       <div className="pointer-events-none absolute inset-0 z-0">
