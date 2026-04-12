@@ -1,3 +1,4 @@
+import { randomBytes } from "crypto";
 import { ObjectId, type Collection } from "mongodb";
 import { getDb } from "./mongodb";
 
@@ -28,6 +29,13 @@ export type RecordingWrite = {
   messages?: RecordingChatMessage[];
   /** Optional per-question video clips (extended schema). */
   clips?: RecordingClip[];
+  /** Set when this row backs a company "live interview" link; matches URL segment after `candidate_`. */
+  liveSessionId?: string;
+  /** Unauthenticated candidates pass this with `recordingId` so chat can bump counts safely. */
+  liveBumpToken?: string;
+  candidateDisplayName?: string;
+  roleTitle?: string;
+  jobDescriptionSnippet?: string;
 };
 
 export type RecordingDoc = RecordingWrite & { _id: ObjectId };
@@ -39,6 +47,7 @@ function recordingsCollection(db: Awaited<ReturnType<typeof getDb>>): Collection
 export async function ensureRecordingIndexes() {
   const db = await getDb();
   await recordingsCollection(db).createIndex({ userId: 1, updatedAt: -1 });
+  await recordingsCollection(db).createIndex({ userId: 1, liveSessionId: 1 }, { sparse: true });
 }
 
 export function recordingTitle(type: InterviewType, createdAt: Date): string {
@@ -66,6 +75,75 @@ export async function createRecording(
     source,
   });
   return result.insertedId;
+}
+
+export type CreateLiveSessionOpts = {
+  type: InterviewType;
+  /** Same id as in `/live-interview/[sessionId]` (without `candidate_` prefix). */
+  liveSessionId: string;
+  candidateName?: string;
+  roleTitle?: string;
+  jobDescription?: string;
+};
+
+export async function createLiveSessionRecording(
+  userId: ObjectId,
+  opts: CreateLiveSessionOpts
+): Promise<{ id: ObjectId; liveBumpToken: string }> {
+  const db = await getDb();
+  const now = new Date();
+  const liveBumpToken = randomBytes(24).toString("hex");
+  const cn = opts.candidateName?.trim();
+  const rt = opts.roleTitle?.trim();
+  const title = cn
+    ? `Live · ${cn}${rt ? ` · ${rt}` : ""}`
+    : recordingTitle(opts.type, now);
+  const jd = opts.jobDescription?.trim();
+  const result = await recordingsCollection(db).insertOne({
+    userId,
+    type: opts.type,
+    title,
+    status: "in_progress",
+    messageCount: 0,
+    createdAt: now,
+    updatedAt: now,
+    liveSessionId: opts.liveSessionId,
+    liveBumpToken,
+    candidateDisplayName: cn || undefined,
+    roleTitle: rt || undefined,
+    jobDescriptionSnippet: jd && jd.length > 0 ? jd.slice(0, 4000) : undefined,
+  });
+  return { id: result.insertedId, liveBumpToken };
+}
+
+export async function getRecordingByLiveSessionForUser(
+  liveSessionId: string,
+  userId: ObjectId
+): Promise<RecordingDoc | null> {
+  const db = await getDb();
+  const doc = await recordingsCollection(db).findOne({ userId, liveSessionId });
+  if (!doc) return null;
+  return doc as RecordingDoc;
+}
+
+export async function bumpRecordingMessageCountByLiveToken(
+  recordingId: string,
+  liveBumpToken: string,
+  delta: number
+): Promise<boolean> {
+  let oid: ObjectId;
+  try {
+    oid = new ObjectId(recordingId);
+  } catch {
+    return false;
+  }
+  if (!liveBumpToken || typeof liveBumpToken !== "string") return false;
+  const db = await getDb();
+  const r = await recordingsCollection(db).updateOne(
+    { _id: oid, liveBumpToken },
+    { $inc: { messageCount: delta }, $set: { updatedAt: new Date() } }
+  );
+  return r.modifiedCount > 0;
 }
 
 export async function listRecordingsForUser(userId: ObjectId): Promise<RecordingDoc[]> {

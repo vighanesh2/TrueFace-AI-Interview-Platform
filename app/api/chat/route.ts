@@ -7,7 +7,7 @@ import {
   resolveGcpServiceAccountKeyPath,
 } from "@/lib/gcp-vertex-gemini";
 import { getSessionUser } from "@/lib/auth";
-import { bumpRecordingMessageCount } from "@/lib/recordings";
+import { bumpRecordingMessageCount, bumpRecordingMessageCountByLiveToken } from "@/lib/recordings";
 import { resolveGeminiApiKey } from "@/lib/resolve-gemini-api-key";
 
 const technicalInstruction = `You are a Senior Engineering Manager at a top tech company conducting a live TECHNICAL interview.
@@ -58,12 +58,15 @@ export async function POST(req: Request) {
       message,
       history: rawHistory,
       recordingId,
+      liveBumpToken,
       interviewType,
       interviewContext,
     } = body as {
       message: string;
       history?: unknown;
       recordingId?: string;
+      /** Paired with recordingId for live candidate links (no login). */
+      liveBumpToken?: string;
       interviewType?: string;
       /** Job title, company, JD, resume text — appended to system prompt when set */
       interviewContext?: string;
@@ -118,9 +121,13 @@ export async function POST(req: Request) {
     }
 
     if (recordingId && typeof recordingId === "string") {
-      const user = await getSessionUser();
-      if (user) {
-        await bumpRecordingMessageCount(recordingId, new ObjectId(user.id), 2);
+      if (typeof liveBumpToken === "string" && liveBumpToken.length > 0) {
+        await bumpRecordingMessageCountByLiveToken(recordingId, liveBumpToken, 2);
+      } else {
+        const user = await getSessionUser();
+        if (user) {
+          await bumpRecordingMessageCount(recordingId, new ObjectId(user.id), 2);
+        }
       }
     }
 

@@ -6,11 +6,9 @@ import { lightPrimaryButton } from "@/lib/dashboard-light-theme";
 export default function DashboardHomePage() {
   return (
     <div className="mx-auto max-w-4xl px-8 py-12 sm:px-10 sm:py-16">
-      <p className="text-2xl" aria-hidden>
-        👋
-      </p>
       <h1 className="mt-4 text-3xl font-bold tracking-tight text-neutral-900 dark:text-neutral-100 sm:text-4xl">
-        Hello there! Welcome back.
+        Hello there! Welcome back.{" "}
+        <span aria-hidden>👋</span>
       </h1>
       <div className="mt-6 space-y-4 text-base leading-relaxed text-neutral-600 dark:text-neutral-400">
         <p>

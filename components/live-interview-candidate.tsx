@@ -1,6 +1,10 @@
 "use client";
 
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef, useCallback, Suspense } from "react";
+import Image from "next/image";
+import { useSearchParams } from "next/navigation";
+import { LiveAvatarSession, SessionEvent } from "@heygen/liveavatar-web-sdk";
+import type { LiveavatarInterviewerGender } from "@/lib/liveavatar-interviewers";
 
 const ML_ENGINE_URL = "http://localhost:8001";
 
@@ -8,7 +12,14 @@ interface Props {
   sessionId: string;
 }
 
-export function LiveInterviewCandidate({ sessionId }: Props) {
+function LiveInterviewCandidateInner({ sessionId }: Props) {
+  const searchParams = useSearchParams();
+  const recordingId = searchParams.get("recording")?.trim() ?? "";
+  const liveBumpToken = searchParams.get("t")?.trim() ?? "";
+  const interviewType = searchParams.get("type") === "technical" ? "technical" : "behavioral";
+  const interviewerGender: LiveavatarInterviewerGender =
+    searchParams.get("interviewer")?.toLowerCase() === "female" ? "female" : "male";
+
   const candidateId = `candidate_${sessionId}`;
   const [messages, setMessages] = useState<{ role: string; text: string }[]>([]);
   const [input, setInput] = useState("");
@@ -18,6 +29,10 @@ export function LiveInterviewCandidate({ sessionId }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const webcamRef = useRef<MediaStream | null>(null);
   const frameIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const avatarRef = useRef<LiveAvatarSession | null>(null);
+  const [avatarStreamReady, setAvatarStreamReady] = useState(false);
+  const [avatarStarting, setAvatarStarting] = useState(false);
+  const [avatarFailed, setAvatarFailed] = useState(false);
 
   const mlCall = useCallback(async (endpoint: string, options: RequestInit = {}) => {
     try {
@@ -68,6 +83,73 @@ export function LiveInterviewCandidate({ sessionId }: Props) {
     };
   }, [mlCall, candidateId]);
 
+  useEffect(() => {
+    let cancelled = false;
+
+    async function startAvatar() {
+      setAvatarStarting(true);
+      setAvatarFailed(false);
+      setAvatarStreamReady(false);
+      try {
+        const tokenRes = await fetch("/api/get-access-token", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            interviewer: interviewerGender,
+            interviewMode: interviewType,
+            profileContext:
+              "Verified TrueFace live interview session. The candidate joined from the monitored candidate link.",
+          }),
+        });
+        const tokenData = (await tokenRes.json()) as { token?: string };
+        if (cancelled) return;
+        if (!tokenRes.ok || !tokenData.token) {
+          setAvatarFailed(true);
+          return;
+        }
+
+        const avatar = new LiveAvatarSession(tokenData.token);
+        if (cancelled) {
+          void avatar.stop().catch(() => {});
+          return;
+        }
+
+        avatarRef.current = avatar;
+
+        avatar.on(SessionEvent.SESSION_STREAM_READY, () => {
+          if (cancelled) return;
+          const video = document.getElementById(
+            "candidate-liveavatar-video"
+          ) as HTMLVideoElement | null;
+          if (video) {
+            avatar.attach(video);
+            setAvatarStreamReady(true);
+          }
+        });
+
+        avatar.on(SessionEvent.SESSION_DISCONNECTED, () => {
+          if (!cancelled) setAvatarStreamReady(false);
+        });
+
+        await avatar.start();
+      } catch {
+        if (!cancelled) setAvatarFailed(true);
+      } finally {
+        if (!cancelled) setAvatarStarting(false);
+      }
+    }
+
+    void startAvatar();
+
+    return () => {
+      cancelled = true;
+      const a = avatarRef.current;
+      avatarRef.current = null;
+      if (a) void a.stop().catch(() => {});
+      setAvatarStreamReady(false);
+    };
+  }, [interviewerGender, interviewType]);
+
   const sendMessage = async () => {
     if (!input.trim()) return;
     const fillers = input.match(/\b(um|uh|like|basically|literally)\b/gi);
@@ -82,7 +164,12 @@ export function LiveInterviewCandidate({ sessionId }: Props) {
       const res = await fetch("/api/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message: input, history: newMessages }),
+        body: JSON.stringify({
+          message: input,
+          history: newMessages,
+          interviewType,
+          ...(recordingId && liveBumpToken ? { recordingId, liveBumpToken } : {}),
+        }),
       });
       const data = await res.json();
       if (data.error) return;
@@ -105,64 +192,151 @@ export function LiveInterviewCandidate({ sessionId }: Props) {
   };
 
   return (
-    <main className="dark flex min-h-screen flex-col items-center bg-gray-950 text-white p-6">
+    <main className="dark flex min-h-screen flex-col bg-neutral-950 text-white">
       <canvas ref={canvasRef} className="hidden" />
 
-      <div className="w-full max-w-2xl mb-6 flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-bold text-white">TrueFace Interview</h1>
-          <p className="text-gray-400 text-sm">This session is being verified by TrueFace</p>
-        </div>
-        <span className={`text-xs px-3 py-1 rounded-full font-bold ${mlConnected ? "bg-green-900 text-green-400" : "bg-gray-800 text-gray-500"}`}>
-          {mlConnected ? "🛡️ Verified Session" : "Connecting..."}
-        </span>
-      </div>
-
-      {/* Chat */}
-      <div className="w-full max-w-2xl bg-gray-900 border border-gray-800 rounded-xl p-6 h-[500px] flex flex-col mb-4">
-        <div className="flex-1 overflow-y-auto flex flex-col gap-3 mb-4">
-          {messages.length === 0 && (
-            <p className="text-gray-500 text-sm text-center mt-16">Your interviewer will greet you shortly. Type hello to begin.</p>
-          )}
-          {messages.map((msg, i) => (
-            <div key={i} className={`p-3 rounded-lg max-w-[80%] text-sm ${msg.role === "user" ? "bg-cyan-900 text-white self-end" : "bg-gray-800 text-white self-start"}`}>
-              <span className="text-xs text-gray-400 block mb-1">{msg.role === "user" ? "You" : "Interviewer"}</span>
-              {msg.text}
-            </div>
-          ))}
-          {isLoading && <p className="text-gray-500 text-sm animate-pulse">Interviewer is typing...</p>}
-        </div>
-
-        {/* Feedback bar */}
-        <div className="flex justify-between text-xs text-gray-500 mb-3">
-          <span>Filler words: <span className={fillerCount > 5 ? "text-red-400 font-bold" : "text-green-400"}>{fillerCount}</span></span>
-          <span>Exchanges: {Math.floor(messages.length / 2)}</span>
-          <span className="text-gray-600">Session: {sessionId.slice(-8)}</span>
-        </div>
-
-        {/* Input */}
-        <div className="flex gap-2">
-          <input
-            type="text"
-            value={input}
-            onChange={e => setInput(e.target.value)}
-            onKeyDown={e => e.key === "Enter" && sendMessage()}
-            placeholder="Type your answer..."
-            className="flex-1 bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white placeholder:text-gray-500 focus:outline-none focus:border-cyan-600"
-          />
-          <button
-            onClick={sendMessage}
-            disabled={isLoading}
-            className="bg-cyan-600 hover:bg-cyan-500 text-white px-4 py-2 rounded-lg text-sm font-bold disabled:opacity-50"
+      <div className="flex min-h-[calc(100dvh-1px)] flex-col px-4 py-5 sm:px-6 sm:py-6 lg:px-8 lg:py-8">
+        <div className="mb-4 shrink-0 flex items-center justify-between gap-4 lg:mb-5">
+          <div>
+            <h1 className="text-2xl font-bold tracking-tight text-neutral-100 sm:text-3xl">TrueFace Interview</h1>
+            <p className="mt-0.5 text-sm text-neutral-500">This session is being verified by TrueFace</p>
+          </div>
+          <span
+            className={`shrink-0 rounded-full px-3 py-1 text-xs font-bold ${
+              mlConnected ? "bg-green-900/90 text-green-400" : "bg-neutral-800 text-neutral-500"
+            }`}
           >
-            Send
-          </button>
+            {mlConnected ? "🛡️ Verified Session" : "Connecting…"}
+          </span>
         </div>
-      </div>
 
-      <p className="text-xs text-gray-600 text-center">
-        🛡️ This interview is monitored by TrueFace AI for authenticity verification
-      </p>
+        <div className="flex min-h-0 flex-1 flex-col gap-4 lg:flex-row lg:items-stretch lg:gap-6">
+          {/* Stage — mirrors LiveAvatarInterview meeting shell + video stack */}
+          <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl border border-neutral-700 bg-neutral-950 shadow-sm dark:shadow-neutral-950/40 lg:min-h-[min(780px,calc(100dvh-9rem))]">
+            <div className="relative flex min-h-[min(52vh,420px)] flex-1 flex-col bg-neutral-950 lg:min-h-0">
+              <div className="absolute right-5 top-3 z-20 flex items-center gap-2 sm:right-6">
+                {avatarStreamReady ? (
+                  <span
+                    className="rounded-lg border border-white/20 bg-black/50 px-2 py-1.5 text-[10px] font-semibold uppercase tracking-wide text-white/90 backdrop-blur-sm"
+                    title="Interview mode for this session"
+                  >
+                    {interviewType === "behavioral" ? "Behavioral" : "Technical"}
+                  </span>
+                ) : null}
+              </div>
+
+              <video
+                id="candidate-liveavatar-video"
+                autoPlay
+                playsInline
+                className={
+                  avatarStreamReady
+                    ? "block min-h-0 w-full flex-1 bg-neutral-950 object-contain object-center"
+                    : "hidden min-h-0 w-full flex-1"
+                }
+              />
+
+              {!avatarStreamReady && (
+                <div className="absolute inset-0 z-10 flex flex-col bg-neutral-950">
+                  <div className="relative min-h-0 flex-1">
+                    <Image
+                      src={interviewerGender === "female" ? "/female.png" : "/male.png"}
+                      alt={interviewerGender === "female" ? "Female interviewer preview" : "Male interviewer preview"}
+                      fill
+                      className="object-cover object-top"
+                      sizes="(max-width: 1024px) 100vw, min(70vw, 900px)"
+                      priority
+                    />
+                    {avatarStarting && (
+                      <div className="absolute inset-0 flex items-center justify-center bg-neutral-950/50 backdrop-blur-[2px]">
+                        <span className="text-sm font-medium text-neutral-200">Connecting video…</span>
+                      </div>
+                    )}
+                    {avatarFailed && (
+                      <div className="absolute inset-x-0 bottom-0 bg-black/70 px-3 py-2.5 text-center text-xs leading-snug text-neutral-300">
+                        Live avatar unavailable (check API key). Chat still works.
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Chat — sidebar width similar to dashboard TrueFace column */}
+          <div className="flex h-[min(420px,45vh)] w-full shrink-0 flex-col rounded-xl border border-neutral-700 bg-neutral-900 p-5 lg:h-auto lg:min-h-0 lg:w-96 lg:max-w-md">
+            <div className="mb-4 flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto">
+              {messages.length === 0 && (
+                <p className="mt-8 text-center text-sm text-neutral-500">
+                  Your interviewer will greet you shortly. Type hello to begin.
+                </p>
+              )}
+              {messages.map((msg, i) => (
+                <div
+                  key={i}
+                  className={`max-w-[85%] rounded-lg p-3 text-sm ${
+                    msg.role === "user"
+                      ? "self-end bg-cyan-900/90 text-white"
+                      : "self-start bg-neutral-800 text-white"
+                  }`}
+                >
+                  <span className="mb-1 block text-xs text-neutral-400">
+                    {msg.role === "user" ? "You" : "Interviewer"}
+                  </span>
+                  {msg.text}
+                </div>
+              ))}
+              {isLoading && <p className="animate-pulse text-sm text-neutral-500">Interviewer is typing…</p>}
+            </div>
+
+            <div className="mb-3 flex justify-between text-xs text-neutral-500">
+              <span>
+                Filler words:{" "}
+                <span className={fillerCount > 5 ? "font-bold text-red-400" : "text-emerald-400"}>{fillerCount}</span>
+              </span>
+              <span>Exchanges: {Math.floor(messages.length / 2)}</span>
+              <span className="text-neutral-600">Session: {sessionId.slice(-8)}</span>
+            </div>
+
+            <div className="flex gap-2">
+              <input
+                type="text"
+                value={input}
+                onChange={(e) => setInput(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && sendMessage()}
+                placeholder="Type your answer..."
+                className="flex-1 rounded-lg border border-neutral-600 bg-neutral-800 px-3 py-2 text-sm text-white placeholder:text-neutral-500 focus:border-cyan-600 focus:outline-none"
+              />
+              <button
+                type="button"
+                onClick={sendMessage}
+                disabled={isLoading}
+                className="shrink-0 rounded-lg bg-cyan-600 px-4 py-2 text-sm font-bold text-white hover:bg-cyan-500 disabled:opacity-50"
+              >
+                Send
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <p className="mt-5 shrink-0 text-center text-xs text-neutral-600 lg:mt-6">
+          🛡️ This interview is monitored by TrueFace AI for authenticity verification
+        </p>
+      </div>
     </main>
+  );
+}
+
+export function LiveInterviewCandidate(props: Props) {
+  return (
+    <Suspense
+      fallback={
+        <main className="flex min-h-screen items-center justify-center bg-neutral-950 text-neutral-400">
+          Loading session…
+        </main>
+      }
+    >
+      <LiveInterviewCandidateInner {...props} />
+    </Suspense>
   );
 }

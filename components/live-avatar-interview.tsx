@@ -460,7 +460,9 @@ export function LiveAvatarInterview() {
 
   // TrueFace ML Engine
   const ML_ENGINE_URL = "http://localhost:8001";
-  const candidateId = useRef(`candidate_${Date.now()}`);
+  const sessionParam = searchParams.get("session");
+  const candidateId = useRef(sessionParam ? `candidate_${sessionParam}` : `candidate_${Date.now()}`);
+  const isLiveInterview = Boolean(sessionParam);
   const [mlConnected, setMlConnected] = useState(false);
   const [mlScores, setMlScores] = useState<{
     final_score: number;
@@ -2303,6 +2305,7 @@ export function LiveAvatarInterview() {
         )}
       </div>
 
+      {isLiveInterview ? (
       <aside className="flex w-full shrink-0 flex-col gap-4 lg:w-72">
         <div className="rounded-xl border border-cyan-800/80 bg-neutral-900 p-4 dark:border-cyan-800">
           <h3 className="mb-2 text-xs font-bold uppercase tracking-wider text-cyan-400">Company Monitor</h3>
@@ -2366,6 +2369,7 @@ export function LiveAvatarInterview() {
           )}
         </div>
       </aside>
+      ) : null}
       </div>
     </div>
   );
