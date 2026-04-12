@@ -14,7 +14,12 @@ const LANG_OPTIONS: { id: LangId; label: string; monaco: string }[] = [
   { id: "cpp", label: "C++", monaco: "cpp" },
 ];
 
-const PASTE_CHAR_THRESHOLD = 400;
+/** Large single insert treated as "heavy paste" for integrity hints. */
+const PASTE_HEAVY_CHARS = 80;
+/** Minimum insert size (with tiny delete) to count as a paste-like edit (Monaco often skips DOM paste events). */
+const PASTE_INSERT_MIN = 15;
+/** Tab / focus away: count hidden visibility + threshold for frequent_tab_away flag. */
+const TAB_AWAY_FLAG_THRESHOLD = 2;
 const IDLE_MS_FLAG = 120_000;
 
 export type KeystrokeSummary = {
@@ -70,8 +75,11 @@ export function CodeEditorPanel({ problem, disabled, onSubmit, testResults }: Pr
   const [timerExpired, setTimerExpired] = useState(false);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const pasteCleanupRef = useRef<(() => void) | null>(null);
+  /** Skip paste heuristics briefly when parent replaces starter code (problem / language change). */
+  const suppressPasteHeuristicUntil = useRef(0);
 
   useEffect(() => {
+    suppressPasteHeuristicUntil.current = Date.now() + 800;
     setCode(defaultCodeFor(language, problem));
   }, [problem, language]);
 
@@ -99,11 +107,20 @@ export function CodeEditorPanel({ problem, disabled, onSubmit, testResults }: Pr
   }, [limitSec, problem.title]);
 
   useEffect(() => {
+    const onVisibility = () => {
+      if (document.visibilityState === "hidden") {
+        tabBlur.current += 1;
+      }
+    };
     const onBlur = () => {
       tabBlur.current += 1;
     };
+    document.addEventListener("visibilitychange", onVisibility);
     window.addEventListener("blur", onBlur);
-    return () => window.removeEventListener("blur", onBlur);
+    return () => {
+      document.removeEventListener("visibilitychange", onVisibility);
+      window.removeEventListener("blur", onBlur);
+    };
   }, []);
 
   useEffect(() => {
@@ -135,7 +152,7 @@ export function CodeEditorPanel({ problem, disabled, onSubmit, testResults }: Pr
   const buildSummary = useCallback((): KeystrokeSummary => {
     const flags: string[] = [];
     if (largePaste.current) flags.push("heavy_paste");
-    if (tabBlur.current >= 4) flags.push("frequent_tab_away");
+    if (tabBlur.current >= TAB_AWAY_FLAG_THRESHOLD) flags.push("frequent_tab_away");
     if (longestIdle.current >= IDLE_MS_FLAG) flags.push("long_idle");
     if (timerExpired) flags.push("timed_out");
     return {
@@ -213,15 +230,64 @@ export function CodeEditorPanel({ problem, disabled, onSubmit, testResults }: Pr
           }}
           onMount={(ed) => {
             pasteCleanupRef.current?.();
-            const dom = ed.getDomNode();
-            const onPaste = (e: ClipboardEvent) => {
+            const disposers: Array<{ dispose: () => void } | (() => void)> = [];
+
+            const onClipboardPaste = (e: ClipboardEvent) => {
               bumpActivity();
               pasteEvents.current += 1;
               const t = e.clipboardData?.getData("text") ?? "";
-              if (t.length >= PASTE_CHAR_THRESHOLD) largePaste.current = true;
+              if (t.length >= PASTE_HEAVY_CHARS) largePaste.current = true;
             };
-            dom?.addEventListener("paste", onPaste);
-            pasteCleanupRef.current = () => dom?.removeEventListener("paste", onPaste);
+            const dom = ed.getDomNode();
+            dom?.addEventListener("paste", onClipboardPaste, true);
+            disposers.push(() => dom?.removeEventListener("paste", onClipboardPaste, true));
+
+            const model = ed.getModel();
+            if (model) {
+              let pasteHeuristicActive = false;
+              const enableTimer = window.setTimeout(() => {
+                pasteHeuristicActive = true;
+              }, 600);
+              disposers.push(() => clearTimeout(enableTimer));
+              const sub = model.onDidChangeContent((e) => {
+                if (!pasteHeuristicActive) return;
+                if (Date.now() < suppressPasteHeuristicUntil.current) return;
+                for (const change of e.changes) {
+                  const ins = change.text.length;
+                  const del = change.rangeLength;
+                  if (
+                    ins >= PASTE_INSERT_MIN &&
+                    del <= Math.max(2, Math.floor(ins * 0.05))
+                  ) {
+                    pasteEvents.current += 1;
+                    bumpActivity();
+                    if (ins >= PASTE_HEAVY_CHARS) largePaste.current = true;
+                  }
+                }
+              });
+              disposers.push(sub);
+            }
+
+            const edAny = ed as unknown as {
+              onDidPaste?: (cb: (e: { text?: string }) => void) => { dispose: () => void };
+            };
+            if (typeof edAny.onDidPaste === "function") {
+              disposers.push(
+                edAny.onDidPaste((e) => {
+                  bumpActivity();
+                  pasteEvents.current += 1;
+                  const t = e?.text ?? "";
+                  if (t.length >= PASTE_HEAVY_CHARS) largePaste.current = true;
+                }),
+              );
+            }
+
+            pasteCleanupRef.current = () => {
+              for (const d of disposers) {
+                if (typeof d === "function") d();
+                else d.dispose();
+              }
+            };
           }}
           options={{
             minimap: { enabled: false },
