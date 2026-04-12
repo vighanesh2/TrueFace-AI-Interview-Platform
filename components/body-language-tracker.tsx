@@ -1,189 +1,19 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState, type RefObject } from "react";
-import clsx from "clsx";
+import { useEffect, useRef, useState } from "react";
 
-const PIP_MOTION_THRESHOLD = 45;
-const PIXEL_DIFF_THRESHOLD = 50;
-const ANALYSIS_W = 64;
-const ANALYSIS_H = 48;
-const FRAME_MS = 1000 / 30;
-
-/**
- * Pixel-diff motion analysis on an existing &lt;video&gt; (e.g. interview PiP).
- * Caller must render a hidden &lt;canvas ref={canvasRef} /&gt; next to the video.
- */
-export function useBodyLanguageAnalysis(
-  videoRef: RefObject<HTMLVideoElement | null>,
-  active: boolean
-) {
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-  const [motionScore, setMotionScore] = useState(0);
-  const [warnings, setWarnings] = useState<string[]>([]);
-  const previousImageData = useRef<Uint8ClampedArray | null>(null);
-  const rafRef = useRef<number | null>(null);
-  const frameTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const warningTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const activeRef = useRef(active);
-  const tickRef = useRef<() => void>(() => {});
-
-  useEffect(() => {
-    activeRef.current = active;
-  }, [active]);
-
-  const clearTimers = useCallback(() => {
-    if (rafRef.current != null) {
-      cancelAnimationFrame(rafRef.current);
-      rafRef.current = null;
-    }
-    if (frameTimeoutRef.current != null) {
-      clearTimeout(frameTimeoutRef.current);
-      frameTimeoutRef.current = null;
-    }
-    if (warningTimeoutRef.current != null) {
-      clearTimeout(warningTimeoutRef.current);
-      warningTimeoutRef.current = null;
-    }
-  }, []);
-
-  const scheduleNext = useCallback(() => {
-    frameTimeoutRef.current = setTimeout(() => {
-      frameTimeoutRef.current = null;
-      if (activeRef.current) {
-        rafRef.current = requestAnimationFrame(() => tickRef.current());
-      }
-    }, FRAME_MS);
-  }, []);
-
-  const analyzeFrame = useCallback(() => {
-    if (!activeRef.current) return;
-
-    const video = videoRef.current;
-    const canvas = canvasRef.current;
-    if (!video || !canvas) {
-      scheduleNext();
-      return;
-    }
-
-    const ctx = canvas.getContext("2d", { willReadFrequently: true });
-    if (!ctx || video.videoWidth === 0) {
-      scheduleNext();
-      return;
-    }
-
-    if (canvas.width !== ANALYSIS_W) {
-      canvas.width = ANALYSIS_W;
-      canvas.height = ANALYSIS_H;
-    }
-
-    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-    const currentFrame = ctx.getImageData(0, 0, canvas.width, canvas.height);
-    const currentData = currentFrame.data;
-
-    if (previousImageData.current) {
-      let diffCount = 0;
-      const totalPixels = currentData.length / 4;
-      const prev = previousImageData.current;
-
-      for (let i = 0; i < currentData.length; i += 4) {
-        const rDiff = Math.abs(currentData[i]! - prev[i]!);
-        const gDiff = Math.abs(currentData[i + 1]! - prev[i + 1]!);
-        const bDiff = Math.abs(currentData[i + 2]! - prev[i + 2]!);
-        if (rDiff + gDiff + bDiff > PIXEL_DIFF_THRESHOLD) diffCount++;
-      }
-
-      const currentMotion = Math.min(100, Math.round((diffCount / totalPixels) * 250));
-      setMotionScore((prevScore) => Math.round(prevScore * 0.8 + currentMotion * 0.2));
-
-      if (currentMotion > PIP_MOTION_THRESHOLD) {
-        setWarnings((prev) =>
-          prev.includes("Moving too much!") ? prev : ["Moving too much!", ...prev].slice(0, 3)
-        );
-        if (warningTimeoutRef.current != null) clearTimeout(warningTimeoutRef.current);
-        warningTimeoutRef.current = setTimeout(() => setWarnings([]), 3000);
-      }
-    }
-
-    previousImageData.current = new Uint8ClampedArray(currentData);
-    scheduleNext();
-  }, [videoRef, scheduleNext]);
-
-  useEffect(() => {
-    tickRef.current = analyzeFrame;
-  }, [analyzeFrame]);
-
-  useEffect(() => {
-    if (!active) {
-      clearTimers();
-      previousImageData.current = null;
-      queueMicrotask(() => {
-        setMotionScore(0);
-        setWarnings([]);
-      });
-      return;
-    }
-
-    rafRef.current = requestAnimationFrame(() => tickRef.current());
-
-    return () => {
-      clearTimers();
-    };
-  }, [active, clearTimers]);
-
-  return { motionScore, warnings, canvasRef };
-}
-
-/** Optional HUD for interview PiP — motion bar + warning (caller supplies scores from the hook). */
-export function BodyLanguagePipHud({
-  motionScore,
-  warnings,
-  className,
-}: {
-  motionScore: number;
-  warnings: string[];
-  className?: string;
-}) {
-  return (
-    <div
-      className={clsx(
-        "pointer-events-none absolute inset-x-0 bottom-0 bg-linear-to-t from-black/85 to-transparent px-2 pb-1.5 pt-4",
-        className
-      )}
-    >
-      <div className="flex items-center justify-between gap-2 text-[10px] font-medium text-white/95">
-        <span className="text-white/70">Motion</span>
-        <span
-          className={clsx(
-            "font-mono tabular-nums",
-            motionScore > 40 ? "text-red-300" : motionScore > 20 ? "text-amber-300" : "text-emerald-300"
-          )}
-        >
-          {motionScore}%
-        </span>
-      </div>
-      <div className="mt-1 h-1 w-full overflow-hidden rounded-full bg-white/15">
-        <div
-          className={clsx(
-            "h-full rounded-full transition-all duration-100",
-            motionScore > 40 ? "bg-red-500" : motionScore > 20 ? "bg-amber-500" : "bg-emerald-500"
-          )}
-          style={{ width: `${Math.min(100, motionScore)}%` }}
-        />
-      </div>
-      {warnings.length > 0 && (
-        <p className="mt-1.5 text-center text-[10px] font-semibold text-red-300 drop-shadow-sm">
-          ⚠️ {warnings[0]}
-        </p>
-      )}
-    </div>
-  );
-}
-
-/** Standalone demo card with its own camera stream. */
 export function BodyLanguageTracker() {
   const videoRef = useRef<HTMLVideoElement>(null);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  
   const [isActive, setIsActive] = useState(false);
-  const { motionScore, warnings, canvasRef } = useBodyLanguageAnalysis(videoRef, isActive);
+  const [motionScore, setMotionScore] = useState(0);
+  const [warnings, setWarnings] = useState<string[]>([]);
+  
+  // Refs for our math engine
+  const previousImageData = useRef<Uint8ClampedArray | null>(null);
+  const animationFrameId = useRef<number | null>(null);
+  const warningTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
   const startCamera = async () => {
     try {
@@ -198,72 +28,147 @@ export function BodyLanguageTracker() {
   };
 
   const stopCamera = () => {
-    if (videoRef.current?.srcObject) {
+    if (videoRef.current && videoRef.current.srcObject) {
       const stream = videoRef.current.srcObject as MediaStream;
-      stream.getTracks().forEach((track) => track.stop());
-      videoRef.current.srcObject = null;
+      stream.getTracks().forEach(track => track.stop());
     }
+    if (animationFrameId.current) cancelAnimationFrame(animationFrameId.current);
     setIsActive(false);
+    setMotionScore(0);
+    setWarnings([]);
   };
 
-  return (
-    <div className="flex w-full max-w-sm flex-col items-center rounded-xl border border-gray-700 bg-gray-900 p-6">
-      <h2 className="mb-4 text-xl font-bold text-white">Body Language AI</h2>
+  // --- THE PIXEL DIFFERENCING ALGORITHM ---
+  const analyzeFrame = () => {
+    if (!videoRef.current || !canvasRef.current || !isActive) return;
 
-      <div className="relative mb-4 aspect-video w-full overflow-hidden rounded-lg border-2 border-gray-800 bg-black shadow-lg">
-        <video
-          ref={videoRef}
-          autoPlay
-          playsInline
-          muted
-          className={clsx(
-            "h-full w-full -scale-x-100 object-cover",
-            isActive ? "opacity-100" : "opacity-0"
-          )}
+    const video = videoRef.current;
+    const canvas = canvasRef.current;
+    const ctx = canvas.getContext("2d", { willReadFrequently: true });
+    
+    if (!ctx || video.videoWidth === 0) {
+      animationFrameId.current = requestAnimationFrame(analyzeFrame);
+      return;
+    }
+
+    // Match canvas size to video size (scale down for performance)
+    if (canvas.width !== 64) {
+      canvas.width = 64;
+      canvas.height = 48;
+    }
+
+    // Draw the current video frame onto the hidden canvas
+    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+    const currentFrame = ctx.getImageData(0, 0, canvas.width, canvas.height);
+    const currentData = currentFrame.data;
+
+    if (previousImageData.current) {
+      let diffCount = 0;
+      const totalPixels = currentData.length / 4;
+
+      // Compare current frame to previous frame
+      for (let i = 0; i < currentData.length; i += 4) {
+        const rDiff = Math.abs(currentData[i] - previousImageData.current[i]);
+        const gDiff = Math.abs(currentData[i + 1] - previousImageData.current[i + 1]);
+        const bDiff = Math.abs(currentData[i + 2] - previousImageData.current[i + 2]);
+        
+        // If the color changed significantly, it means movement!
+        if (rDiff + gDiff + bDiff > 50) {
+          diffCount++;
+        }
+      }
+
+      // Calculate motion as a percentage (0 to 100)
+      const currentMotion = Math.min(100, Math.round((diffCount / totalPixels) * 250));
+      
+      // Smooth the score out so it doesn't jump crazily
+      setMotionScore(prev => Math.round(prev * 0.8 + currentMotion * 0.2));
+
+      // Trigger a warning if they move too much!
+      if (currentMotion > 45) {
+        if (!warnings.includes("Moving too much!")) {
+          setWarnings(prev => ["Moving too much!", ...prev].slice(0, 3));
+          
+          // Clear warning after 3 seconds
+          if (warningTimeoutRef.current) clearTimeout(warningTimeoutRef.current);
+          warningTimeoutRef.current = setTimeout(() => setWarnings([]), 3000);
+        }
+      }
+    }
+
+    // Save this frame to compare against the next one
+    previousImageData.current = new Uint8ClampedArray(currentData);
+    
+    // Loop the function at 30fps
+    setTimeout(() => {
+      animationFrameId.current = requestAnimationFrame(analyzeFrame);
+    }, 1000 / 30); 
+  };
+
+  // Start the analysis loop when the camera turns on
+  useEffect(() => {
+    if (isActive) {
+      animationFrameId.current = requestAnimationFrame(analyzeFrame);
+    }
+    return () => {
+      if (animationFrameId.current) cancelAnimationFrame(animationFrameId.current);
+      if (warningTimeoutRef.current) clearTimeout(warningTimeoutRef.current);
+    };
+  }, [isActive]);
+
+  return (
+    <div className="flex flex-col items-center bg-gray-900 p-6 rounded-xl border border-gray-700 max-w-sm w-full">
+      <h2 className="text-xl font-bold text-white mb-4">Body Language AI</h2>
+      
+      {/* Video Feed */}
+      <div className="relative w-full aspect-video bg-black rounded-lg overflow-hidden border-2 border-gray-800 mb-4 shadow-lg group">
+        <video 
+          ref={videoRef} 
+          autoPlay 
+          playsInline 
+          muted 
+          className={`w-full h-full object-cover transform -scale-x-100 ${isActive ? 'opacity-100' : 'opacity-0'}`} 
         />
+        
+        {/* Hidden Canvas for Math Processing */}
         <canvas ref={canvasRef} className="hidden" />
 
         {!isActive && (
-          <div className="absolute inset-0 flex items-center justify-center text-gray-500">Camera Offline</div>
+          <div className="absolute inset-0 flex items-center justify-center text-gray-500">
+            Camera Offline
+          </div>
         )}
       </div>
 
+      {/* Controls & Metrics */}
       <div className="w-full space-y-4">
-        <button
-          type="button"
+        <button 
           onClick={isActive ? stopCamera : startCamera}
-          className={clsx(
-            "w-full rounded py-2 font-bold transition-colors",
-            isActive ? "bg-red-600 text-white hover:bg-red-500" : "bg-cyan-600 text-white hover:bg-cyan-500"
-          )}
+          className={`w-full py-2 rounded font-bold transition-colors ${isActive ? 'bg-red-600 hover:bg-red-500 text-white' : 'bg-cyan-600 hover:bg-cyan-500 text-white'}`}
         >
           {isActive ? "Stop Tracking" : "Start Tracking"}
         </button>
 
         {isActive && (
           <div className="space-y-2">
-            <div className="flex items-center justify-between text-sm">
+            <div className="flex justify-between items-center text-sm">
               <span className="text-gray-400">Fidget / Motion Score:</span>
-              <span
-                className={clsx(
-                  "font-mono font-bold",
-                  motionScore > 40 ? "text-red-400" : motionScore > 20 ? "text-yellow-400" : "text-green-400"
-                )}
-              >
+              <span className={`font-mono font-bold ${motionScore > 40 ? 'text-red-400' : motionScore > 20 ? 'text-yellow-400' : 'text-green-400'}`}>
                 {motionScore}%
               </span>
             </div>
-            <div className="h-2 w-full overflow-hidden rounded-full bg-gray-800">
-              <div
-                className={clsx(
-                  "h-full transition-all duration-100",
-                  motionScore > 40 ? "bg-red-500" : motionScore > 20 ? "bg-yellow-500" : "bg-green-500"
-                )}
+            
+            {/* Progress Bar */}
+            <div className="w-full h-2 bg-gray-800 rounded-full overflow-hidden">
+              <div 
+                className={`h-full transition-all duration-100 ${motionScore > 40 ? 'bg-red-500' : motionScore > 20 ? 'bg-yellow-500' : 'bg-green-500'}`}
                 style={{ width: `${Math.min(100, motionScore)}%` }}
               />
             </div>
+
+            {/* Warnings Log */}
             {warnings.length > 0 && (
-              <div className="mt-4 rounded border border-red-800 bg-red-900/30 p-3 text-xs font-semibold text-red-300 animate-pulse">
+              <div className="mt-4 p-3 bg-red-900/30 border border-red-800 rounded text-red-300 text-xs font-semibold animate-pulse">
                 ⚠️ {warnings[0]}
               </div>
             )}
