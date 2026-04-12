@@ -36,9 +36,16 @@ yarn-error.log*
 # local Gemini JSON (use GEMINI_CREDENTIALS_PATH); never commit keys
 gemini-credentials.json
 
-# GCP service account keys (Vertex)
+# service account keys
+*.json.key
 newface-493021-1ef8bc846b2c.json
 newface-*.json
+
+# Python backend — cloned RAG corpora (loader)
+/backend/data/
+/backend/.venv/
+**/__pycache__/
+*.py[cod]
 
 # vercel
 .vercel
