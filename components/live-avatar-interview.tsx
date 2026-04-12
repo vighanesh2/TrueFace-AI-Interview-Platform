@@ -242,6 +242,17 @@ export function LiveAvatarInterview() {
   const pipResizeDragRef = useRef<{ startX: number; startW: number } | null>(null);
   const answerInputRef = useRef<HTMLInputElement | null>(null);
 
+  // TrueFace ML Engine
+  const ML_ENGINE_URL = "http://localhost:8001";
+  const candidateId = useRef(`candidate_${Date.now()}`);
+  const [mlConnected, setMlConnected] = useState(false);
+  const [mlScores, setMlScores] = useState<{final_score: number; risk_level: string; signal_breakdown: Record<string, {score: number; label: string}>} | null>(null);
+  const [monitorCopied, setMonitorCopied] = useState(false);
+  const [monitorUrl, setMonitorUrl] = useState("");
+  const frameIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+
+
   const [pipWidth, setPipWidthState] = useState(200);
   useEffect(() => {
     try {
@@ -313,6 +324,60 @@ export function LiveAvatarInterview() {
     } finally {
       setResumeParsing(false);
     }
+  }, []);
+
+
+  // TrueFace ML Engine effects
+  useEffect(() => {
+    const init = async () => {
+      try {
+        const res = await fetch(`${ML_ENGINE_URL}/session/start?candidate_id=${candidateId.current}`, { method: "POST" });
+        if (res.ok) setMlConnected(true);
+      } catch {}
+    };
+    init();
+  }, []);
+
+  useEffect(() => {
+    const fetchScores = async () => {
+      try {
+        const res = await fetch(`${ML_ENGINE_URL}/session/report?candidate_id=${candidateId.current}&candidate_name=Candidate`, { method: "POST" });
+        if (res.ok) {
+          const data = await res.json();
+          if (data?.final_score !== undefined) setMlScores(data);
+        }
+      } catch {}
+    };
+    fetchScores();
+    const interval = setInterval(fetchScores, 5000);
+    return () => clearInterval(interval);
+  }, []);
+
+  useEffect(() => {
+    if (!sessionActive) return;
+    const canvas = document.createElement("canvas");
+    canvasRef.current = canvas;
+    frameIntervalRef.current = setInterval(async () => {
+      if (!userVideoRef.current || !canvasRef.current) return;
+      const ctx = canvasRef.current.getContext("2d");
+      if (!ctx) return;
+      canvasRef.current.width = 320;
+      canvasRef.current.height = 240;
+      ctx.drawImage(userVideoRef.current, 0, 0, 320, 240);
+      canvasRef.current.toBlob(async (blob) => {
+        if (!blob) return;
+        const formData = new FormData();
+        formData.append("file", blob, "frame.jpg");
+        try {
+          await fetch(`${ML_ENGINE_URL}/analyze/frame?candidate_id=${candidateId.current}`, { method: "POST", body: formData });
+        } catch {}
+      }, "image/jpeg", 0.8);
+    }, 3000);
+    return () => { if (frameIntervalRef.current) clearInterval(frameIntervalRef.current); };
+  }, [sessionActive]);
+
+  useEffect(() => {
+    setMonitorUrl(`${window.location.origin}/monitor/${candidateId.current}`);
   }, []);
 
   const bodyLanguage = useBodyLanguageAnalysis(userVideoRef, sessionActive && cameraOn);
@@ -713,6 +778,15 @@ export function LiveAvatarInterview() {
       "h-screen max-h-screen w-screen max-w-none rounded-none border-0 shadow-none lg:min-h-0"
   );
 
+  const getBarColor = (score: number) =>
+    score < 0.35 ? "bg-green-500" : score < 0.55 ? "bg-yellow-500" : "bg-red-500";
+  const getRiskColor = (risk: string) =>
+    risk === "AUTHENTIC" || risk === "LOW RISK"
+      ? "text-green-400"
+      : risk === "MEDIUM RISK"
+        ? "text-yellow-400"
+        : "text-red-400";
+
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <div className="mb-4 shrink-0 lg:mb-5">
@@ -721,6 +795,7 @@ export function LiveAvatarInterview() {
         </h1>
       </div>
 
+      <div className="flex min-h-0 flex-1 flex-col gap-4 lg:flex-row lg:items-stretch lg:gap-6">
       <div ref={stageContainerRef} className={meetingShell}>
         {/* Main stage — avatar / video */}
         <div
@@ -1203,6 +1278,71 @@ export function LiveAvatarInterview() {
             </div>
           )}
         </div>
+      </div>
+
+      <aside className="flex w-full shrink-0 flex-col gap-4 lg:w-72">
+        <div className="rounded-xl border border-cyan-800/80 bg-neutral-900 p-4 dark:border-cyan-800">
+          <h3 className="mb-2 text-xs font-bold uppercase tracking-wider text-cyan-400">Company Monitor</h3>
+          <p className="mb-2 text-xs text-neutral-400">Share with interviewer:</p>
+          <div className="mb-2 break-all font-mono text-xs text-cyan-300">{monitorUrl || "…"}</div>
+          <button
+            type="button"
+            onClick={() => {
+              if (!monitorUrl) return;
+              void navigator.clipboard.writeText(monitorUrl);
+              setMonitorCopied(true);
+              window.setTimeout(() => setMonitorCopied(false), 2000);
+            }}
+            className="w-full rounded px-3 py-1.5 text-xs text-white transition-colors bg-cyan-800 hover:bg-cyan-700"
+          >
+            {monitorCopied ? "Copied!" : "Copy link"}
+          </button>
+        </div>
+        <div className="rounded-xl border border-neutral-700 bg-neutral-900 p-4">
+          <div className="mb-3 flex items-center justify-between">
+            <h3 className="text-xs font-bold uppercase tracking-wider text-neutral-400">TrueFace AI</h3>
+            <span
+              className={clsx(
+                "rounded-full px-2 py-0.5 text-xs",
+                mlConnected ? "bg-green-900 text-green-400" : "bg-neutral-800 text-neutral-500"
+              )}
+            >
+              {mlConnected ? "● LIVE" : "● OFFLINE"}
+            </span>
+          </div>
+          {mlScores ? (
+            <>
+              <div className="mb-3 rounded-lg bg-neutral-800 py-3 text-center">
+                <div className="text-4xl font-bold text-white">{Math.round((1 - mlScores.final_score) * 100)}%</div>
+                <div className="mt-1 text-xs text-neutral-400">Authenticity</div>
+                <div className={clsx("mt-1 text-xs font-bold", getRiskColor(mlScores.risk_level))}>
+                  {mlScores.risk_level}
+                </div>
+              </div>
+              <div className="flex flex-col gap-2">
+                {Object.entries(mlScores.signal_breakdown).map(([key, val]) => (
+                  <div key={key}>
+                    <div className="mb-0.5 flex justify-between text-xs">
+                      <span className="capitalize text-neutral-400">{key.replace(/_/g, " ")}</span>
+                      <span className="text-neutral-500">{val.label}</span>
+                    </div>
+                    <div className="h-1.5 w-full rounded-full bg-neutral-800">
+                      <div
+                        className={clsx("h-1.5 rounded-full transition-all duration-700", getBarColor(val.score))}
+                        style={{ width: `${val.score * 100}%` }}
+                      />
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </>
+          ) : (
+            <div className="py-6 text-center text-xs text-neutral-500">
+              {mlConnected ? "Analyzing…" : "Start interview to begin"}
+            </div>
+          )}
+        </div>
+      </aside>
       </div>
     </div>
   );
