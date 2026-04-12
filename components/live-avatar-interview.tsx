@@ -1,18 +1,22 @@
 "use client";
 
-import { Button } from "@headlessui/react";
+import { Button, Listbox, ListboxButton, ListboxOption, ListboxOptions } from "@headlessui/react";
 import { LiveAvatarSession, SessionEvent } from "@heygen/liveavatar-web-sdk";
 import clsx from "clsx";
 import Image from "next/image";
-import Link from "next/link";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { lightPrimaryButton } from "@/lib/dashboard-light-theme";
+import { buildInterviewKnowledge } from "@/lib/interview-context";
 import type { LiveavatarInterviewerGender } from "@/lib/liveavatar-interviewers";
 import { BodyLanguagePipHud, useBodyLanguageAnalysis } from "@/components/body-language-tracker";
 
 const PIP_WIDTH_MIN = 120;
 const PIP_WIDTH_MAX = 480;
 const PIP_WIDTH_STORAGE = "trueface-pip-width";
+
+const prejoinFieldClass =
+  "w-full rounded-lg border border-white/15 bg-neutral-900/90 px-3 py-2 text-sm text-neutral-100 placeholder:text-neutral-500 focus:border-white/35 focus:outline-none focus:ring-1 focus:ring-white/20";
 
 function getFullscreenElement(): Element | null {
   if (typeof document === "undefined") return null;
@@ -199,6 +203,24 @@ function ZoomControlButton({
 }
 
 export function LiveAvatarInterview() {
+  const router = useRouter();
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
+  const brainSessionIdRef = useRef<string | null>(null);
+  const interviewContextRef = useRef("");
+
+  const [jobTitle, setJobTitle] = useState("");
+  const [company, setCompany] = useState("");
+  const [jobDescription, setJobDescription] = useState("");
+  const [resumeText, setResumeText] = useState("");
+  const [resumeParsing, setResumeParsing] = useState(false);
+  const [resumeError, setResumeError] = useState("");
+  const [resumeLabel, setResumeLabel] = useState("");
+
+  const [interviewMode, setInterviewModeState] = useState<"behavioral" | "technical">(() =>
+    searchParams.get("mode") === "technical" ? "technical" : "behavioral"
+  );
+
   const [input, setInput] = useState("");
   const [messages, setMessages] = useState<{ role: string; text: string }[]>([]);
   const [isAvatarStarting, setIsAvatarStarting] = useState(false);
@@ -211,6 +233,8 @@ export function LiveAvatarInterview() {
   const [isStageFullscreen, setIsStageFullscreen] = useState(false);
   const [interviewerGender, setInterviewerGender] = useState<LiveavatarInterviewerGender>("male");
   const recognitionRef = useRef<{ stop: () => void; start: () => void } | null>(null);
+  /** True while the user wants dictation on; survives browser auto-`end` between phrases. */
+  const micActiveIntentRef = useRef(false);
   const avatarRef = useRef<LiveAvatarSession | null>(null);
   const userVideoRef = useRef<HTMLVideoElement | null>(null);
   const userStreamRef = useRef<MediaStream | null>(null);
@@ -243,65 +267,149 @@ export function LiveAvatarInterview() {
     }
   }, []);
 
+  useEffect(() => {
+    setInterviewModeState(searchParams.get("mode") === "technical" ? "technical" : "behavioral");
+  }, [searchParams]);
+
+  const setInterviewMode = useCallback(
+    (mode: "behavioral" | "technical") => {
+      if (sessionActive || isAvatarStarting) return;
+      setInterviewModeState(mode);
+      const q = new URLSearchParams(searchParams.toString());
+      if (mode === "technical") q.set("mode", "technical");
+      else q.delete("mode");
+      const qs = q.toString();
+      router.replace(qs ? `${pathname}?${qs}` : pathname, { scroll: false });
+    },
+    [isAvatarStarting, pathname, router, searchParams, sessionActive]
+  );
+
+  const handleResumeFile = useCallback(async (file: File | undefined) => {
+    setResumeError("");
+    setResumeLabel("");
+    setResumeText("");
+    if (!file) return;
+    if (!file.name.toLowerCase().endsWith(".pdf")) {
+      setResumeError("Please choose a PDF file.");
+      return;
+    }
+    setResumeLabel(file.name);
+    setResumeParsing(true);
+    try {
+      const fd = new FormData();
+      fd.append("file", file);
+      const res = await fetch("/api/parse-resume", { method: "POST", body: fd });
+      const data = (await res.json()) as { text?: string; error?: string };
+      if (!res.ok) {
+        throw new Error(data.error || "Upload failed");
+      }
+      if (!data.text?.trim()) {
+        throw new Error("No text extracted from PDF");
+      }
+      setResumeText(data.text);
+    } catch (e) {
+      setResumeError(e instanceof Error ? e.message : "Could not read PDF");
+      setResumeLabel("");
+    } finally {
+      setResumeParsing(false);
+    }
+  }, []);
+
   const bodyLanguage = useBodyLanguageAnalysis(userVideoRef, sessionActive && cameraOn);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
-    const w = window as unknown as {
-      SpeechRecognition?: new () => {
-        continuous: boolean;
-        interimResults: boolean;
-        lang: string;
-        onresult: ((e: { resultIndex: number; results: { length: number; [i: number]: { [0]: { transcript: string } } } }) => void) | null;
-        onerror: (() => void) | null;
-        onend: (() => void) | null;
-        stop: () => void;
-        start: () => void;
-      };
-      webkitSpeechRecognition?: new () => {
-        continuous: boolean;
-        interimResults: boolean;
-        lang: string;
-        onresult: ((e: { resultIndex: number; results: { length: number; [i: number]: { [0]: { transcript: string } } } }) => void) | null;
-        onerror: (() => void) | null;
-        onend: (() => void) | null;
-        stop: () => void;
-        start: () => void;
-      };
+    type RecResultList = { length: number; [i: number]: { 0: { transcript: string } } };
+    type Rec = {
+      continuous: boolean;
+      interimResults: boolean;
+      lang: string;
+      onresult: ((e: { results: RecResultList }) => void) | null;
+      onerror: ((e: { error: string }) => void) | null;
+      onend: (() => void) | null;
+      stop: () => void;
+      start: () => void;
     };
-    const SpeechRecognition = w.SpeechRecognition || w.webkitSpeechRecognition;
+    const w = window as unknown as {
+      SpeechRecognition?: new () => Rec;
+      webkitSpeechRecognition?: new () => Rec;
+    };
+    const SpeechRecognitionCtor = w.SpeechRecognition || w.webkitSpeechRecognition;
 
-    if (SpeechRecognition) {
-      const recognition = new SpeechRecognition();
+    if (SpeechRecognitionCtor) {
+      const recognition = new SpeechRecognitionCtor();
       recognition.continuous = true;
       recognition.interimResults = true;
       recognition.lang = "en-US";
 
       recognition.onresult = (event) => {
-        let currentTranscript = "";
-        for (let i = event.resultIndex; i < event.results.length; ++i) {
-          currentTranscript += event.results[i]![0]!.transcript;
+        let full = "";
+        const { results } = event;
+        for (let i = 0; i < results.length; i++) {
+          const item = results[i]?.[0];
+          if (item?.transcript) {
+            full += item.transcript;
+          }
         }
-        setInput(currentTranscript);
+        setInput(full);
       };
 
-      recognition.onerror = () => setIsListening(false);
-      recognition.onend = () => setIsListening(false);
+      recognition.onerror = (event) => {
+        const code = event.error;
+        if (code === "not-allowed" || code === "service-not-allowed") {
+          micActiveIntentRef.current = false;
+          setIsListening(false);
+        }
+      };
+
+      recognition.onend = () => {
+        if (micActiveIntentRef.current && recognitionRef.current) {
+          queueMicrotask(() => {
+            if (!micActiveIntentRef.current || !recognitionRef.current) return;
+            try {
+              recognitionRef.current.start();
+            } catch {
+              micActiveIntentRef.current = false;
+              setIsListening(false);
+            }
+          });
+        } else {
+          setIsListening(false);
+        }
+      };
 
       recognitionRef.current = recognition;
     }
   }, []);
 
+  const stopSpeechRecognitionUserIntent = useCallback(() => {
+    micActiveIntentRef.current = false;
+    const r = recognitionRef.current;
+    if (r) {
+      try {
+        r.stop();
+      } catch {
+        /* ignore */
+      }
+    }
+    setIsListening(false);
+  }, []);
+
   const toggleListening = () => {
     const r = recognitionRef.current;
     if (!r) return;
-    if (isListening) {
-      r.stop();
-      setIsListening(false);
+    if (micActiveIntentRef.current) {
+      stopSpeechRecognitionUserIntent();
     } else {
+      micActiveIntentRef.current = true;
       setInput("");
-      r.start();
-      setIsListening(true);
+      try {
+        r.start();
+        setIsListening(true);
+      } catch {
+        micActiveIntentRef.current = false;
+        setIsListening(false);
+      }
     }
   };
 
@@ -395,28 +503,44 @@ export function LiveAvatarInterview() {
     setIsAvatarStarting(false);
     setIsChatting(false);
     setInterviewerSubtitle("");
+    brainSessionIdRef.current = null;
     stopUserCamera();
 
-    if (isListening && recognitionRef.current) {
-      try {
-        recognitionRef.current.stop();
-      } catch {
-        /* ignore */
-      }
-      setIsListening(false);
-    }
+    stopSpeechRecognitionUserIntent();
   };
 
   const startAvatarSession = async () => {
     if (isAvatarStarting || sessionActive) return;
+    if (resumeParsing) {
+      alert("Wait for the resume PDF to finish processing, or remove the file.");
+      return;
+    }
+
+    const knowledge = buildInterviewKnowledge({
+      jobTitle,
+      company,
+      jobDescription,
+      resumeText,
+      sessionNote: `LiveAvatar mock interview. Mode: ${interviewMode}. Interviewer: ${interviewerGender}.`,
+    });
+    interviewContextRef.current = knowledge;
 
     setIsAvatarStarting(true);
+    setMessages([]);
+    brainSessionIdRef.current = null;
+
+    const modeAtStart = interviewMode;
+    const genderAtStart = interviewerGender;
 
     try {
       const tokenRes = await fetch("/api/get-access-token", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ interviewer: interviewerGender }),
+        body: JSON.stringify({
+          interviewer: genderAtStart,
+          interviewMode: modeAtStart,
+          profileContext: knowledge,
+        }),
       });
       const tokenData = await tokenRes.json();
 
@@ -437,6 +561,44 @@ export function LiveAvatarInterview() {
           avatar.attach(videoElement);
           setSessionActive(true);
         }
+        if (modeAtStart === "behavioral") {
+          void (async () => {
+            try {
+              const startRes = await fetch("/api/interview-brain/start", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  knowledge,
+                  mode: "behavioral",
+                }),
+              });
+              const data = (await startRes.json()) as {
+                session_id?: string;
+                response?: string;
+                error?: string;
+              };
+              if (!startRes.ok || !data.session_id || !data.response) {
+                throw new Error(data.error || "Interview brain failed to start");
+              }
+              brainSessionIdRef.current = data.session_id;
+              setMessages([{ role: "ai", text: data.response }]);
+              setInterviewerSubtitle(data.response);
+              const a = avatarRef.current;
+              if (a) {
+                try {
+                  await a.repeat(data.response);
+                } catch (sdkError) {
+                  console.error("Avatar repeat failed:", sdkError);
+                }
+              }
+            } catch (e) {
+              console.error("Behavioral brain start:", e);
+              alert(
+                "Could not start the behavioral interview engine. Run the Python API: uvicorn backend.main:app --reload --host 127.0.0.1 --port 8000"
+              );
+            }
+          })();
+        }
       });
 
       avatar.on(SessionEvent.SESSION_DISCONNECTED, () => {
@@ -455,14 +617,7 @@ export function LiveAvatarInterview() {
   const sendMessage = async () => {
     if (!input.trim() || isChatting) return;
 
-    if (isListening && recognitionRef.current) {
-      try {
-        recognitionRef.current.stop();
-      } catch {
-        /* ignore */
-      }
-      setIsListening(false);
-    }
+    stopSpeechRecognitionUserIntent();
 
     const userText = input;
     setInput("");
@@ -472,28 +627,48 @@ export function LiveAvatarInterview() {
     setIsChatting(true);
 
     try {
-      const formattedHistory = currentMessages.map((msg) => ({
-        role: msg.role === "user" ? "user" : "model",
-        parts: [{ text: msg.text }],
-      }));
+      let aiResponse: string;
 
-      const chatRes = await fetch("/api/chat", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          message: userText,
-          history: formattedHistory,
-          interviewType: "technical",
-        }),
-      });
+      if (interviewMode === "behavioral") {
+        const sid = brainSessionIdRef.current;
+        if (!sid) {
+          throw new Error("Behavioral session not ready yet. Wait for the interviewer to finish speaking.");
+        }
+        const chatRes = await fetch("/api/interview-brain/turn", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ sessionId: sid, answer: userText }),
+        });
+        const chatData = (await chatRes.json()) as { response?: string; error?: string };
+        if (!chatRes.ok || !chatData.response) {
+          throw new Error(chatData.error || "Interview brain did not respond");
+        }
+        aiResponse = chatData.response;
+      } else {
+        const formattedHistory = currentMessages.map((msg) => ({
+          role: msg.role === "user" ? "user" : "model",
+          parts: [{ text: msg.text }],
+        }));
 
-      const chatData = await chatRes.json();
+        const chatRes = await fetch("/api/chat", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            message: userText,
+            history: formattedHistory,
+            interviewType: "technical",
+            interviewContext: interviewContextRef.current,
+          }),
+        });
 
-      if (!chatRes.ok || !chatData.response) {
-        throw new Error(chatData.error || "Gemini did not respond");
+        const chatData = (await chatRes.json()) as { response?: string; error?: string };
+
+        if (!chatRes.ok || !chatData.response) {
+          throw new Error(chatData.error || "Gemini did not respond");
+        }
+
+        aiResponse = chatData.response;
       }
-
-      const aiResponse = chatData.response as string;
       setMessages((prev) => [...prev, { role: "ai", text: aiResponse }]);
       setInterviewerSubtitle(aiResponse);
 
@@ -541,19 +716,9 @@ export function LiveAvatarInterview() {
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <div className="mb-4 shrink-0 lg:mb-5">
-        <Link
-          href="/dashboard"
-          className="text-sm font-medium text-neutral-600 underline-offset-2 hover:text-neutral-900 hover:underline dark:text-neutral-400 dark:hover:text-neutral-100"
-        >
-          ← Back to dashboard
-        </Link>
-        <h1 className="mt-3 text-2xl font-bold tracking-tight text-neutral-900 dark:text-neutral-100 sm:text-3xl">
-          Technical mock interview
+        <h1 className="text-2xl font-bold tracking-tight text-neutral-900 dark:text-neutral-100 sm:text-3xl">
+          Mock Interview
         </h1>
-        <p className="mt-1 max-w-3xl text-sm leading-relaxed text-neutral-600 dark:text-neutral-400">
-          Turn on your camera for a draggable self-view with a light motion readout (same feed as the analysis). Use mic and
-          the bar at the bottom to reply; interviewer lines show as captions.
-        </p>
       </div>
 
       <div ref={stageContainerRef} className={meetingShell}>
@@ -564,17 +729,75 @@ export function LiveAvatarInterview() {
             isStageFullscreen && "min-h-0 h-full"
           )}
         >
-          {!sessionActive && (
-            <button
-              type="button"
-              onClick={() => void toggleStageFullscreen()}
-              className="absolute right-3 top-3 z-20 flex h-11 w-11 items-center justify-center rounded-full border border-white/20 bg-neutral-900/85 text-white shadow-lg backdrop-blur-sm hover:bg-neutral-800"
-              title={isStageFullscreen ? "Exit full screen" : "Full screen"}
-              aria-label={isStageFullscreen ? "Exit full screen" : "Enter full screen"}
-            >
-              {isStageFullscreen ? <IconFullscreenExit /> : <IconFullscreenEnter />}
-            </button>
-          )}
+          <div className="absolute right-3 top-3 z-20 flex items-center gap-2">
+            {!sessionActive ? (
+              <Listbox
+                value={interviewMode}
+                onChange={(v: "behavioral" | "technical") => setInterviewMode(v)}
+                disabled={isAvatarStarting}
+              >
+                <ListboxButton
+                  className={clsx(
+                    "inline-flex items-center gap-1 rounded-lg border px-2 py-1.5 text-left text-xs font-medium text-white/95 shadow-lg backdrop-blur-sm transition-colors",
+                    "border-white/20 bg-neutral-900/90 hover:bg-neutral-800/95",
+                    "focus:outline-none focus-visible:ring-2 focus-visible:ring-white/40",
+                    isAvatarStarting && "cursor-not-allowed opacity-50"
+                  )}
+                  aria-label="Interview mode"
+                >
+                  <span className="whitespace-nowrap">{interviewMode === "behavioral" ? "Behavioral" : "Technical"}</span>
+                  <svg className="h-3 w-3 shrink-0 text-white/60" viewBox="0 0 20 20" fill="currentColor" aria-hidden>
+                    <path
+                      fillRule="evenodd"
+                      d="M5.23 7.21a.75.75 0 011.06.02L10 11.168l3.71-3.94a.75.75 0 111.08 1.04l-4.25 4.5a.75.75 0 01-1.08 0l-4.25-4.5a.75.75 0 01.02-1.06z"
+                      clipRule="evenodd"
+                    />
+                  </svg>
+                </ListboxButton>
+                <ListboxOptions
+                  anchor="bottom end"
+                  portal
+                  modal={false}
+                  className={clsx(
+                    "z-[100] min-w-36 rounded-lg border py-0.5 shadow-xl [--anchor-gap:6px]",
+                    "border-white/15 bg-neutral-950/95 text-white backdrop-blur-md",
+                    "focus:outline-none"
+                  )}
+                >
+                  <ListboxOption
+                    value="behavioral"
+                    className="cursor-pointer px-3 py-1.5 text-xs text-white/95 data-focus:bg-white/10"
+                  >
+                    Behavioral
+                  </ListboxOption>
+                  <ListboxOption
+                    value="technical"
+                    className="cursor-pointer px-3 py-1.5 text-xs text-white/95 data-focus:bg-white/10"
+                  >
+                    Technical
+                  </ListboxOption>
+                </ListboxOptions>
+              </Listbox>
+            ) : (
+              <span
+                className="rounded-lg border border-white/20 bg-black/50 px-2 py-1.5 text-[10px] font-semibold uppercase tracking-wide text-white/90 backdrop-blur-sm"
+                title="Mode is fixed for this session"
+              >
+                {interviewMode === "behavioral" ? "Behavioral" : "Technical"}
+              </span>
+            )}
+            {!sessionActive && (
+              <button
+                type="button"
+                onClick={() => void toggleStageFullscreen()}
+                className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full border border-white/20 bg-neutral-900/85 text-white shadow-lg backdrop-blur-sm hover:bg-neutral-800"
+                title={isStageFullscreen ? "Exit full screen" : "Full screen"}
+                aria-label={isStageFullscreen ? "Exit full screen" : "Enter full screen"}
+              >
+                {isStageFullscreen ? <IconFullscreenExit /> : <IconFullscreenEnter />}
+              </button>
+            )}
+          </div>
 
           <video
             id="avatar-video"
@@ -589,12 +812,88 @@ export function LiveAvatarInterview() {
           </video>
 
           {!sessionActive && (
-            <div className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-6 bg-neutral-950 px-4 text-center">
-              <div className="max-w-md space-y-2">
-                <p className="text-sm font-medium text-neutral-200">Choose your interviewer</p>
-                <p className="text-xs text-neutral-500">Then start the session. You can switch next time before joining.</p>
+            <div className="absolute inset-0 z-10 flex flex-col items-center overflow-y-auto overflow-x-hidden bg-neutral-950 px-4 py-6">
+              <div className="flex w-full max-w-lg flex-col items-stretch gap-5 sm:max-w-xl">
+                <div className="rounded-xl border border-white/10 bg-neutral-900/50 p-4 text-left">
+                  <p className="text-sm font-semibold text-neutral-100">Role context (optional)</p>
+                  <p className="mt-1 text-xs text-neutral-500">
+                    Add any details you want—the avatar and interviewer use them when provided. Technical vs behavioral follows
+                    the mode in the corner. Nothing here is required to start.
+                  </p>
+                  <div className="mt-4 space-y-3">
+                    <div>
+                      <label htmlFor="prejoin-job-title" className="mb-1 block text-xs font-medium text-neutral-400">
+                        Job title <span className="text-neutral-600">(optional)</span>
+                      </label>
+                      <input
+                        id="prejoin-job-title"
+                        type="text"
+                        value={jobTitle}
+                        onChange={(e) => setJobTitle(e.target.value)}
+                        disabled={isAvatarStarting}
+                        placeholder="e.g. Software Engineer Intern"
+                        className={prejoinFieldClass}
+                        autoComplete="organization-title"
+                      />
+                    </div>
+                    <div>
+                      <label htmlFor="prejoin-company" className="mb-1 block text-xs font-medium text-neutral-400">
+                        Company <span className="text-neutral-600">(optional)</span>
+                      </label>
+                      <input
+                        id="prejoin-company"
+                        type="text"
+                        value={company}
+                        onChange={(e) => setCompany(e.target.value)}
+                        disabled={isAvatarStarting}
+                        placeholder="e.g. Acme Corp"
+                        className={prejoinFieldClass}
+                        autoComplete="organization"
+                      />
+                    </div>
+                    <div>
+                      <label htmlFor="prejoin-jd" className="mb-1 block text-xs font-medium text-neutral-400">
+                        Job description <span className="text-neutral-600">(optional)</span>
+                      </label>
+                      <textarea
+                        id="prejoin-jd"
+                        value={jobDescription}
+                        onChange={(e) => setJobDescription(e.target.value)}
+                        disabled={isAvatarStarting}
+                        placeholder="Paste the role summary, requirements, or what you want to practice for."
+                        rows={4}
+                        className={clsx(prejoinFieldClass, "resize-y min-h-[88px]")}
+                      />
+                    </div>
+                    <div>
+                      <span className="mb-1 block text-xs font-medium text-neutral-400">
+                        Resume (PDF) <span className="text-neutral-600">(optional)</span>
+                      </span>
+                      <input
+                        type="file"
+                        accept="application/pdf,.pdf"
+                        disabled={isAvatarStarting || resumeParsing}
+                        onChange={(e) => void handleResumeFile(e.target.files?.[0])}
+                        className="block w-full text-xs text-neutral-400 file:mr-2 file:rounded-md file:border-0 file:bg-white/10 file:px-2 file:py-1.5 file:text-xs file:text-neutral-200"
+                      />
+                      {resumeParsing ? (
+                        <p className="mt-1 text-xs text-neutral-500">Extracting text from PDF…</p>
+                      ) : resumeLabel ? (
+                        <p className="mt-1 text-xs text-emerald-400/90">
+                          Loaded: {resumeLabel} ({resumeText.length.toLocaleString()} characters)
+                        </p>
+                      ) : null}
+                      {resumeError ? <p className="mt-1 text-xs text-red-400">{resumeError}</p> : null}
+                    </div>
+                  </div>
+                </div>
+
+                <div className="text-center">
+                  <p className="text-sm font-medium text-neutral-200">Choose your interviewer</p>
+                  <p className="mt-1 text-xs text-neutral-500">Then start the session.</p>
+                </div>
               </div>
-              <fieldset className="flex w-full max-w-lg flex-col gap-3 sm:max-w-xl">
+              <fieldset className="mt-2 flex w-full max-w-lg flex-col gap-3 sm:max-w-xl">
                 <legend className="sr-only">Interviewer appearance</legend>
                 <div className="grid grid-cols-2 gap-3 sm:gap-4" role="group" aria-label="Interviewer">
                   <button
@@ -661,12 +960,13 @@ export function LiveAvatarInterview() {
                   </button>
                 </div>
               </fieldset>
-              <p className="text-sm text-neutral-400">Video off until you connect.</p>
+              <p className="mt-4 text-center text-sm text-neutral-400">Video off until you connect.</p>
               <Button
                 type="button"
                 onClick={() => void startAvatarSession()}
-                disabled={isAvatarStarting}
-                className={lightPrimaryButton}
+                disabled={isAvatarStarting || resumeParsing}
+                className={clsx(lightPrimaryButton, "mx-auto mt-2")}
+                title={resumeParsing ? "Wait for PDF text extraction to finish" : undefined}
               >
                 {isAvatarStarting ? "Starting avatar…" : "Start interview"}
               </Button>

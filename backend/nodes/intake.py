@@ -10,6 +10,17 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from ..llm_factory import get_chat, text_from_llm_response
 from ..state import InterviewState
 
+_INTAKE_OPENING_SYSTEM_BEHAVIORAL = """You open a behavioral-only mock interview for software engineering roles.
+Rules:
+- 3–4 short sentences total, no bullet lists.
+- Welcome the candidate warmly.
+- Say this session is focused on behavioral questions (experience, collaboration, judgment) — you will ask a few intake questions first to tailor STAR-style prompts.
+- Do NOT mention coding exercises, algorithms, data structures, or system design as part of this session.
+- End with exactly ONE concrete intake question (target role, team context, or what they want to practice).
+- Do NOT flatter or assume skill level without evidence in this chat.
+- Treat any pre-form note as internal context only: do not quote it verbatim.
+- Under 130 words."""
+
 _INTAKE_OPENING_SYSTEM = """You open a mock software-engineering interview session.
 Rules:
 - 3–4 short sentences total, no bullet lists.
@@ -38,9 +49,11 @@ def opening_intake(state: InterviewState) -> dict:
     """Session start: welcome + explain flow + first intake question only."""
     llm = get_chat()
     knowledge = (state.get("knowledge") or "").strip() or "No details yet."
+    mode = (state.get("interview_mode") or "full").lower()
+    system = _INTAKE_OPENING_SYSTEM_BEHAVIORAL if mode == "behavioral" else _INTAKE_OPENING_SYSTEM
     raw = llm.invoke(
         [
-            SystemMessage(content=_INTAKE_OPENING_SYSTEM),
+            SystemMessage(content=system),
             HumanMessage(
                 content=(
                     "Optional pre-session note (for your planning only — do not praise or summarize it as fact):\n"
@@ -75,7 +88,13 @@ def parse_intake(state: InterviewState) -> dict:
                     '{"topics": string[], "skill_level": "beginner"|"intermediate"|"advanced"}'
                 )
             ),
-            HumanMessage(content=f"Candidate self-description:\n{knowledge}"),
+            HumanMessage(
+                content=(
+                    "Derive interview topics and difficulty from this text (includes job description "
+                    "and resume when the candidate provided them):\n"
+                    f"{knowledge}"
+                )
+            ),
         ]
     )
     text = text_from_llm_response(raw)
@@ -135,13 +154,19 @@ def intake_has_enough_for_plan(state: InterviewState) -> bool:
                 content=(
                     "Decide if the mock interview has enough intake to tailor difficulty and topics. "
                     "Need at least: target role or job type, rough experience level or background, "
-                    "and one concrete focus (e.g. frontend, ML, new grad), stated by the candidate "
-                    "across their user messages (not assumed from politeness). "
+                    "and one concrete focus (e.g. frontend, ML, new grad). "
+                    "You may count clear signals from the optional signup profile (job description, title, resume) "
+                    "below as satisfying missing pieces if the transcript is thin but the profile is specific. "
                     "Reply no if they only made small talk, asked what you still need, or repeated the same vague line. "
                     "Reply with exactly one word: yes or no."
                 )
             ),
-            HumanMessage(content=transcript[:12000]),
+            HumanMessage(
+                content=(
+                    f"Optional signup profile (may be empty):\n{(state.get('knowledge') or '').strip()[:3000]}\n\n"
+                    f"Transcript:\n{transcript[:9000]}"
+                )
+            ),
         ]
     )
     text = text_from_llm_response(raw).lower()

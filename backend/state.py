@@ -7,6 +7,8 @@ from typing import Any, TypedDict
 
 class InterviewState(TypedDict, total=False):
     session_id: str
+    # "full" = technical → system design → behavioral; "behavioral" = behavioral-only mock
+    interview_mode: str
     knowledge: str
     extracted_topics: list[str]
     skill_level: str

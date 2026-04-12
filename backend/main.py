@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import uuid
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -45,6 +45,7 @@ _sessions: dict[str, InterviewState] = {}
 
 class StartBody(BaseModel):
     knowledge: str = Field(..., min_length=1)
+    mode: Literal["full", "behavioral"] = "full"
 
 
 class TurnBody(BaseModel):
@@ -83,6 +84,7 @@ def session_start(body: StartBody) -> StartResponse:
     sid = str(uuid.uuid4())
     state: InterviewState = {
         "session_id": sid,
+        "interview_mode": body.mode,
         "knowledge": body.knowledge.strip(),
         "conversation_history": [],
         "turn_count": 0,

@@ -27,9 +27,10 @@ def retrieve_context(state: InterviewState) -> dict:
         if m.get("role") == "user":
             last_user = m.get("content", "")
             break
+    knowledge_head = (state.get("knowledge") or "").strip()[:1200]
     if not last_user.strip():
         last_user = (state.get("knowledge") or "")[:1500]
-    query_text = f"{phase} {topic} {last_user}".strip()[:2000]
+    query_text = f"{phase} {topic} {knowledge_head} {last_user}".strip()[:2000]
     try:
         emb = get_embeddings().embed_query(query_text)
         ctx = query_similar(emb, category=category, top_k=5)

@@ -74,7 +74,7 @@ function IconSettings({ className }: { className?: string }) {
 
 const nav = [
   { href: "/dashboard", label: "Home", Icon: IconHome, end: true },
-  { href: "/dashboard/interview", label: "Live technical", Icon: IconLiveInterview, end: true },
+  { href: "/dashboard/interview", label: "Mock Interview", Icon: IconLiveInterview, end: true },
   { href: "/dashboard/recordings", label: "Recordings", Icon: IconRecordings, end: false },
   { href: "/dashboard/settings", label: "Settings", Icon: IconSettings, end: false },
 ] as const;

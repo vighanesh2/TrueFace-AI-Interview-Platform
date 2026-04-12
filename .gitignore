@@ -43,7 +43,7 @@ newface-*.json
 
 # Python backend — cloned RAG corpora (loader)
 /backend/data/
-/backend/.venv/
+.venv/
 **/__pycache__/
 *.py[cod]
 

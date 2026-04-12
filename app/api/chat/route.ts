@@ -17,7 +17,9 @@ Rules:
 2. Use short follow-ups based on their last answer and how deep they go.
 3. Keep each reply under 3 sentences so a voice avatar stays natural.
 4. If they struggle, offer a small hint—not the full answer.
-5. Never break character. You are the interviewer.`;
+5. If they ask you to repeat, rephrase, or say they didn’t hear you: restate your last question briefly—do not thank them or act as if they answered.
+6. If they say something off-topic, weird, or unclear: respond naturally with a short clarification or redirect—no empty “thank you” or “thanks for sharing.”
+7. Never break character. You are the interviewer.`;
 
 const behavioralInstruction = `You are a Senior Engineering Manager conducting a live BEHAVIORAL interview.
 The candidate is applying for an internship or early-career role.
@@ -26,7 +28,9 @@ Rules:
 2. Use follow-ups to probe specifics, trade-offs, and ownership—mirror real hiring loops.
 3. Keep each reply under 3 sentences.
 4. If an answer is vague, ask one clarifying follow-up before moving on.
-5. Never break character. You are the interviewer.`;
+5. If they ask you to repeat or didn’t catch your question: restate it briefly—no thank-you, no pretending they answered.
+6. If they say something off-topic or nonsensical: one short natural line, then steer back—no empty thanks.
+7. Never break character. You are the interviewer.`;
 
 function normalizeGeminiHistory(raw: unknown): Content[] {
   if (!Array.isArray(raw)) return [];
@@ -55,11 +59,14 @@ export async function POST(req: Request) {
       history: rawHistory,
       recordingId,
       interviewType,
+      interviewContext,
     } = body as {
       message: string;
       history?: unknown;
       recordingId?: string;
       interviewType?: string;
+      /** Job title, company, JD, resume text — appended to system prompt when set */
+      interviewContext?: string;
     };
 
     if (typeof message !== "string" || !message.trim()) {
@@ -67,8 +74,15 @@ export async function POST(req: Request) {
     }
 
     const history = normalizeGeminiHistory(rawHistory);
-    const systemInstruction =
+    const baseInstruction =
       interviewType === "behavioral" ? behavioralInstruction : technicalInstruction;
+    const ctx =
+      typeof interviewContext === "string" && interviewContext.trim().length > 0
+        ? interviewContext.trim()
+        : "";
+    const systemInstruction = ctx
+      ? `${baseInstruction}\n\n---\nCandidate and role context — shape every question around this role; when a job description is present, prefer realistic scenarios and skills from it over generic prompts (do not read the JD aloud verbatim):\n${ctx}`
+      : baseInstruction;
 
     let responseText: string;
 

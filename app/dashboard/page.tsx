@@ -1,6 +1,7 @@
 import Image from "next/image";
 import Link from "next/link";
-import { NewInterviewLauncher } from "./new-interview-launcher";
+import clsx from "clsx";
+import { lightPrimaryButton } from "@/lib/dashboard-light-theme";
 
 export default function DashboardHomePage() {
   return (
@@ -17,15 +18,11 @@ export default function DashboardHomePage() {
           <span className="rounded-md bg-neutral-100 px-1.5 py-0.5 font-medium text-neutral-800 dark:bg-neutral-800 dark:text-neutral-100">
             TRUEFACE workspace
           </span>
-          . Run{" "}
+          .           Open{" "}
           <span className="rounded-md bg-neutral-100 px-1.5 py-0.5 font-medium text-neutral-800 dark:bg-neutral-800 dark:text-neutral-100">
-            technical
+            Mock interview
           </span>{" "}
-          or{" "}
-          <span className="rounded-md bg-neutral-100 px-1.5 py-0.5 font-medium text-neutral-800 dark:bg-neutral-800 dark:text-neutral-100">
-            behavioral
-          </span>{" "}
-          mock interviews, then review every session from{" "}
+          to pick behavioral or technical mode, then review sessions from{" "}
           <span className="rounded-md bg-neutral-100 px-1.5 py-0.5 font-medium text-neutral-800 dark:bg-neutral-800 dark:text-neutral-100">
             Recordings
           </span>
@@ -50,7 +47,12 @@ export default function DashboardHomePage() {
       </div>
 
       <div className="mt-10 flex flex-wrap items-center gap-3">
-        <NewInterviewLauncher />
+        <Link
+          href="/dashboard/interview"
+          className={clsx(lightPrimaryButton, "inline-flex items-center justify-center")}
+        >
+          Mock interview
+        </Link>
         <Link
           href="/dashboard/recordings"
           className="inline-flex items-center gap-2 rounded-xl border border-neutral-300 bg-white px-5 py-3 text-sm font-semibold text-neutral-800 shadow-sm transition-colors hover:bg-neutral-50 dark:border-neutral-600 dark:bg-neutral-900 dark:text-neutral-100 dark:hover:bg-neutral-800"

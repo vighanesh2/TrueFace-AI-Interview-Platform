@@ -8,7 +8,9 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-load_dotenv(REPO_ROOT / ".env.local")
+# Match Next.js: base `.env`, then `.env.local` overrides (many dev setups only have `.env`).
+load_dotenv(REPO_ROOT / ".env")
+load_dotenv(REPO_ROOT / ".env.local", override=True)
 
 _cred = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS")
 if _cred:

@@ -13,15 +13,49 @@ export async function POST(req: Request) {
     }
 
     let interviewer: string | undefined;
+    let interviewMode: string | undefined;
+    let profileContext: string | undefined;
     try {
-      const body = (await req.json()) as { interviewer?: string };
+      const body = (await req.json()) as {
+        interviewer?: string;
+        interviewMode?: string;
+        /** Optional job + resume text; truncated server-side for API limits */
+        profileContext?: string;
+      };
       interviewer = body.interviewer;
+      interviewMode = body.interviewMode;
+      profileContext = body.profileContext;
     } catch {
       /* empty body */
     }
 
     const avatarId =
       resolveInterviewerAvatarId(interviewer) ?? LIVEAVATAR_INTERVIEWER_IDS.male;
+
+    const isBehavioral = interviewMode === "behavioral";
+
+    const interviewTypeLine = isBehavioral
+      ? "Session type: BEHAVIORAL mock interview—experience, collaboration, leadership, and judgment (STAR/CAR). This is not a coding or algorithms screen unless the product explicitly switches mode."
+      : "Session type: TECHNICAL mock interview—algorithms, systems, debugging depth, and stack discussion. This is not a behavioral-only screen unless the product explicitly switches mode.";
+
+    const behaviorLine =
+      "If the candidate asks you to repeat or says something off-topic or unclear, respond naturally—restate or redirect—without empty thanks or pretending they answered when they have not.";
+
+    let personaPrompt = isBehavioral
+      ? `You are a Senior Engineering Manager conducting a behavioral mock interview. ${interviewTypeLine} ${behaviorLine}`
+      : `You are a Senior Engineering Manager conducting a technical mock interview. ${interviewTypeLine} ${behaviorLine}`;
+
+    const ctx =
+      typeof profileContext === "string" && profileContext.trim().length > 0
+        ? profileContext.trim().slice(0, 3200)
+        : "";
+    if (ctx) {
+      personaPrompt += ` Candidate and role context (internal—anchor questions to the target role; when a job description is included, prefer skills and scenarios implied by it over generic interview prompts; do not read the JD aloud verbatim unless clarifying): ${ctx}`;
+    }
+
+    if (personaPrompt.length > 8000) {
+      personaPrompt = personaPrompt.slice(0, 8000);
+    }
 
     const res = await fetch("https://api.liveavatar.com/v1/sessions/token", {
       method: "POST",
@@ -33,7 +67,7 @@ export async function POST(req: Request) {
         mode: "FULL",
         avatar_id: avatarId,
         avatar_persona: {
-          prompt: "You are a Senior Engineering Manager conducting a technical mock interview.",
+          prompt: personaPrompt,
         },
       }),
     });
