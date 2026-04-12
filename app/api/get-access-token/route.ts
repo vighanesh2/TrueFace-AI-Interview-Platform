@@ -24,20 +24,18 @@ export async function POST() {
 
     const data = await res.json();
 
-    // 🚨 DEBUGGING: You can actually delete these console logs now if you want, 
-    // but leaving them is harmless.
-    console.log("\n=== LIVEAVATAR RAW RESPONSE ===");
-    console.log(data);
-    console.log("===============================\n");
-
-    // THE FIX: Check for code 1000 and data.session_token
     if (data.code !== 1000 || !data.data?.session_token) {
-       return NextResponse.json({ error: "LiveAvatar rejected the request", details: data }, { status: 400 });
+      console.error("\nHEYGEN TOKEN REJECTION DETAILS");
+      console.error(data);
+      console.error("=====================================\n");
+      return NextResponse.json({ error: "LiveAvatar rejected the request", details: data }, { status: 400 });
     }
 
-    // THE FIX: Return the correct token path
-    return NextResponse.json({ token: data.data.session_token });
-    
+    return NextResponse.json({
+      token: data.data.session_token,
+      sessionId: data.data.session_id
+    });
+
   } catch (error) {
     console.error('Error fetching LiveAvatar token:', error);
     return NextResponse.json({ error: "Failed to generate access token" }, { status: 500 });
