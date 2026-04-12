@@ -1,7 +1,11 @@
 import { NextResponse } from "next/server";
 import { buildInterviewKnowledge } from "@/lib/interview-context";
 import { LIVE_INTERVIEW_QUESTION_FOCUS } from "@/lib/live-interview-focus";
-import { bumpRecordingMessageCountByLiveToken, getRecordingForLiveCandidate } from "@/lib/recordings";
+import {
+  appendLiveHiringTranscriptByToken,
+  bumpRecordingMessageCountByLiveToken,
+  getRecordingForLiveCandidate,
+} from "@/lib/recordings";
 
 const BASE = (process.env.INTERVIEW_BRAIN_URL || "http://127.0.0.1:8000").replace(/\/$/, "");
 
@@ -81,6 +85,13 @@ export async function POST(req: Request) {
             ? JSON.stringify(data.detail)
             : "Interview brain error";
       return NextResponse.json({ error: detail, detail: data }, { status: res.status >= 500 ? 502 : res.status });
+    }
+    const opening =
+      typeof data.response === "string" ? data.response.trim() : "";
+    if (recordingId && liveBumpToken && opening) {
+      await appendLiveHiringTranscriptByToken(recordingId, liveBumpToken, [
+        { role: "interviewer", text: opening },
+      ]);
     }
     return NextResponse.json(data);
   } catch (e) {

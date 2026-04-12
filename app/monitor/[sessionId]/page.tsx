@@ -28,13 +28,6 @@ interface MLReport {
   };
 }
 
-interface ProctoringEvent {
-  type: string;
-  timestamp: number;
-  details: string;
-  severity: string;
-}
-
 type RecordingInfo = {
   id: string;
   title: string;
@@ -44,28 +37,21 @@ type RecordingInfo = {
   candidateDisplayName: string | null;
   roleTitle: string | null;
   updatedAt: string;
+  messages?: { role: string; text: string }[];
 };
 
 type ChatTurn = { role: "candidate" | "interviewer"; text: string };
 
-function buildTranscriptSummary(turns: ChatTurn[]): string {
-  if (turns.length === 0) {
-    return "No transcript synced from the engine yet. Exchanges still update your recordings when the candidate uses the hiring link with recording enabled.";
-  }
-  const nIv = turns.filter((t) => t.role === "interviewer").length;
-  const nCd = turns.filter((t) => t.role === "candidate").length;
-  const lastIv = [...turns].reverse().find((t) => t.role === "interviewer");
-  const lastCd = [...turns].reverse().find((t) => t.role === "candidate");
-  const parts = [
-    `${nIv} interviewer · ${nCd} candidate turn${nCd === 1 ? "" : "s"}.`,
-    lastIv
-      ? `Last question: ${lastIv.text.length > 200 ? `${lastIv.text.slice(0, 200)}…` : lastIv.text}`
-      : "",
-    lastCd
-      ? `Last answer: ${lastCd.text.length > 180 ? `${lastCd.text.slice(0, 180)}…` : lastCd.text}`
-      : "",
-  ].filter(Boolean);
-  return parts.join(" ");
+function recordingRowsToTurns(rows: { role: string; text: string }[]): ChatTurn[] {
+  return rows
+    .map((m) => {
+      const r = m.role.toLowerCase();
+      const role: ChatTurn["role"] =
+        r === "candidate" || r === "user" ? "candidate" : "interviewer";
+      const text = typeof m.text === "string" ? m.text.trim() : "";
+      return text ? { role, text } : null;
+    })
+    .filter((x): x is ChatTurn => x !== null);
 }
 
 function AuthenticitySparkline({ values }: { values: number[] }) {
@@ -104,8 +90,11 @@ export default function MonitorPage({ params }: { params: Promise<{ sessionId: s
   const { sessionId } = use(params);
   const [report, setReport] = useState<MLReport | null>(null);
   const [connected, setConnected] = useState(false);
+  const [sessionEnded, setSessionEnded] = useState(false);
+  const [finalReport, setFinalReport] = useState<MLReport | null>(null);
+  const prevFramesRef = { current: 0 };
+  const noChangeCountRef = { current: 0 };
   const [lastUpdate, setLastUpdate] = useState<Date | null>(null);
-  const [proctoringEvents, setProctoringEvents] = useState<ProctoringEvent[]>([]);
   const [authenticityTrail, setAuthenticityTrail] = useState<number[]>([]);
   const [recording, setRecording] = useState<RecordingInfo | null | undefined>(undefined);
   const [conversationTurns, setConversationTurns] = useState<ChatTurn[]>([]);
@@ -131,13 +120,15 @@ export default function MonitorPage({ params }: { params: Promise<{ sessionId: s
           return;
         }
         const data = (await res.json()) as { recording: RecordingInfo | null };
-        if (!cancelled) setRecording(data.recording ?? null);
+        if (!cancelled) {
+          setRecording(data.recording ?? null);
+        }
       } catch {
         if (!cancelled) setRecording(null);
       }
     };
     void loadRecording();
-    const t = window.setInterval(loadRecording, 8000);
+    const t = window.setInterval(loadRecording, 4000);
     return () => {
       cancelled = true;
       window.clearInterval(t);
@@ -158,16 +149,12 @@ export default function MonitorPage({ params }: { params: Promise<{ sessionId: s
           setLastUpdate(new Date());
           const pct = Math.round((1 - data.final_score) * 100);
           setAuthenticityTrail((prev) => [...prev.slice(-39), pct]);
-        }
-
-        const procRes = await fetch(
-          `${ML_ENGINE_CLIENT_BASE}/session/proctoring/${encodeURIComponent(mlCandidateId)}`
-        );
-        if (procRes.ok) {
-          const procData = (await procRes.json()) as { proctoring_events?: ProctoringEvent[] };
-          if (procData.proctoring_events) {
-            setProctoringEvents(procData.proctoring_events);
-          }
+          const currentFrames = data.session_stats?.frames_analyzed ?? 0;
+          if (currentFrames === prevFramesRef.current && currentFrames > 0) {
+            noChangeCountRef.current += 1;
+            if (noChangeCountRef.current >= 5) { setSessionEnded(true); setFinalReport(data); }
+          } else { noChangeCountRef.current = 0; }
+          prevFramesRef.current = currentFrames;
         }
 
         const convRes = await fetch(
@@ -222,10 +209,14 @@ export default function MonitorPage({ params }: { params: Promise<{ sessionId: s
     return "text-amber-700 dark:text-amber-400";
   };
 
-  const transcriptSummary = useMemo(
-    () => buildTranscriptSummary(conversationTurns),
-    [conversationTurns]
-  );
+  const transcriptFromRecording = useMemo(() => {
+    const rows = recording?.messages;
+    if (!Array.isArray(rows) || rows.length === 0) return [];
+    return recordingRowsToTurns(rows);
+  }, [recording]);
+
+  const displayConversationTurns =
+    transcriptFromRecording.length > 0 ? transcriptFromRecording : conversationTurns;
 
   const card = clsx(
     "rounded-xl border border-neutral-200 bg-white p-5 shadow-sm",
@@ -240,6 +231,46 @@ export default function MonitorPage({ params }: { params: Promise<{ sessionId: s
   return (
     <div className="min-h-screen bg-white font-sans text-neutral-900 dark:bg-neutral-950 dark:text-neutral-100">
       <div className="mx-auto max-w-6xl px-5 py-8 sm:px-8 sm:py-10">
+        {sessionEnded && finalReport && (
+          <div className="mb-6 rounded-xl border border-neutral-300 bg-neutral-100 p-5 dark:border-neutral-600 dark:bg-neutral-900/80">
+            <div className="mb-3 flex items-center gap-3">
+              <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-neutral-300 bg-white text-neutral-600 dark:border-neutral-600 dark:bg-neutral-950 dark:text-neutral-300">
+                <svg className="h-5 w-5" viewBox="0 0 24 24" fill="none" aria-hidden>
+                  <path
+                    d="M12 8v5M12 16h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
+                    stroke="currentColor"
+                    strokeWidth="1.75"
+                    strokeLinecap="round"
+                  />
+                </svg>
+              </span>
+              <div>
+                <h2 className="font-bold text-neutral-900 dark:text-neutral-100">Session ended</h2>
+                <p className="text-sm text-neutral-600 dark:text-neutral-400">
+                  The candidate has left. Live monitoring is paused; final scores below are frozen from the last update.
+                </p>
+              </div>
+            </div>
+            <div className="grid grid-cols-3 gap-4 text-center">
+              <div className="rounded-lg bg-white p-3 dark:bg-neutral-950/60">
+                <div className="text-2xl font-bold text-neutral-900 dark:text-white">
+                  {Math.round((1 - finalReport.final_score) * 100)}%
+                </div>
+                <div className="mt-1 text-xs text-neutral-500">Final authenticity</div>
+              </div>
+              <div className="rounded-lg bg-white p-3 dark:bg-neutral-950/60">
+                <div className="text-2xl font-bold text-neutral-900 dark:text-white">
+                  {finalReport.session_stats?.conversation_turns ?? 0}
+                </div>
+                <div className="mt-1 text-xs text-neutral-500">Total turns</div>
+              </div>
+              <div className="rounded-lg bg-white p-3 dark:bg-neutral-950/60">
+                <div className="text-2xl font-bold text-neutral-900 dark:text-white">{finalReport.risk_level}</div>
+                <div className="mt-1 text-xs text-neutral-500">Final risk level</div>
+              </div>
+            </div>
+          </div>
+        )}
         <header className="mb-8 flex flex-col gap-4 border-b border-neutral-200 pb-6 dark:border-neutral-800 sm:flex-row sm:items-center sm:justify-between">
           <div>
             <p className="text-xs font-semibold uppercase tracking-wide text-neutral-500 dark:text-neutral-400">
@@ -446,104 +477,64 @@ export default function MonitorPage({ params }: { params: Promise<{ sessionId: s
                             style={{ width: `${val.score * 100}%` }}
                           />
                         </div>
+                        {key.toLowerCase().includes("deepfake") ? (
+                          <p className="mt-2 text-[10px] leading-snug text-neutral-500 dark:text-neutral-500">
+                            Depends on your configured ML engine and frame quality. Many pipelines lag or miss
+                            face-swap / replay attacks; treat as advisory, not proof.
+                          </p>
+                        ) : null}
                       </div>
                     ))}
                   </div>
                 </div>
 
-                <div className="grid gap-6 lg:grid-cols-2">
-                  <div className={clsx(card, "flex flex-col")}>
-                    <h2 className="text-sm font-semibold tracking-tight text-neutral-900 dark:text-neutral-100">
-                      Live conversation
-                    </h2>
-                    <p className="mt-1 text-xs text-neutral-500 dark:text-neutral-400">
-                      Synced when the engine exposes transcript data. Permanent copy also builds in{" "}
-                      <Link href="/dashboard/recordings" className="font-medium underline-offset-2 hover:underline">
-                        Recordings
-                      </Link>
-                      .
-                      {report.session_stats ? (
-                        <>
-                          {" "}
-                          <span className="tabular-nums">
-                            Engine reports {report.session_stats.conversation_turns} turn
-                            {report.session_stats.conversation_turns === 1 ? "" : "s"}.
-                          </span>
-                        </>
-                      ) : null}
-                    </p>
+                <div className={clsx(card, "flex flex-col")}>
+                  <h2 className="text-sm font-semibold tracking-tight text-neutral-900 dark:text-neutral-100">
+                    Live conversation
+                  </h2>
+                  <p className="mt-1 text-xs text-neutral-500 dark:text-neutral-400">
+                    Transcript syncs from this session&apos;s recording while the candidate uses a hiring link with
+                    recording enabled. A full copy is also available in{" "}
+                    <Link href="/dashboard/recordings" className="font-medium underline-offset-2 hover:underline">
+                      Recordings
+                    </Link>
+                    . If no job link was used, lines may still appear when the verification engine exposes them.
+                    {report.session_stats ? (
+                      <>
+                        {" "}
+                        <span className="tabular-nums">
+                          Engine reports {report.session_stats.conversation_turns} turn
+                          {report.session_stats.conversation_turns === 1 ? "" : "s"}.
+                        </span>
+                      </>
+                    ) : null}
+                  </p>
 
-                    <div className="mt-3 rounded-md border border-neutral-200 bg-neutral-50/80 p-3 dark:border-neutral-700 dark:bg-neutral-800/40">
-                      <h3 className="text-[10px] font-semibold uppercase tracking-wider text-neutral-500 dark:text-neutral-400">
-                        Transcript summary
-                      </h3>
-                      <p className="mt-1.5 text-xs leading-relaxed text-neutral-700 dark:text-neutral-300">
-                        {transcriptSummary}
-                      </p>
+                  <div className="mt-3 min-h-[200px] flex-1 overflow-hidden rounded-md border border-neutral-200 bg-neutral-50 dark:border-neutral-700 dark:bg-neutral-950/50">
+                    <div className="max-h-[min(360px,45vh)] space-y-2 overflow-y-auto p-3">
+                      {displayConversationTurns.length === 0 ? (
+                        <p className="py-8 text-center text-xs text-neutral-500 dark:text-neutral-400">
+                          Waiting for transcript lines…
+                        </p>
+                      ) : (
+                        displayConversationTurns.map((t, i) => (
+                          <div
+                            key={`${i}-${t.text.slice(0, 24)}`}
+                            className={clsx(
+                              "max-w-[95%] rounded-lg border px-3 py-2 text-xs leading-relaxed shadow-sm",
+                              t.role === "candidate"
+                                ? "ml-auto border-neutral-200 bg-white text-neutral-800 dark:border-neutral-600 dark:bg-neutral-800 dark:text-neutral-100"
+                                : "mr-auto border-neutral-200 bg-white text-neutral-800 dark:border-neutral-600 dark:bg-neutral-800/80 dark:text-neutral-100"
+                            )}
+                          >
+                            <span className="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-neutral-500 dark:text-neutral-400">
+                              {t.role === "candidate" ? "Candidate" : "Interviewer"}
+                            </span>
+                            {t.text}
+                          </div>
+                        ))
+                      )}
                     </div>
-
-                    <div className="mt-3 min-h-[200px] flex-1 overflow-hidden rounded-md border border-neutral-200 bg-neutral-50 dark:border-neutral-700 dark:bg-neutral-950/50">
-                      <div className="max-h-[min(360px,45vh)] space-y-2 overflow-y-auto p-3">
-                        {conversationTurns.length === 0 ? (
-                          <p className="py-8 text-center text-xs text-neutral-500 dark:text-neutral-400">
-                            Waiting for transcript lines from the engine…
-                          </p>
-                        ) : (
-                          conversationTurns.map((t, i) => (
-                            <div
-                              key={`${i}-${t.text.slice(0, 24)}`}
-                              className={clsx(
-                                "max-w-[95%] rounded-lg border px-3 py-2 text-xs leading-relaxed shadow-sm",
-                                t.role === "candidate"
-                                  ? "ml-auto border-neutral-200 bg-white text-neutral-800 dark:border-neutral-600 dark:bg-neutral-800 dark:text-neutral-100"
-                                  : "mr-auto border-neutral-200 bg-white text-neutral-800 dark:border-neutral-600 dark:bg-neutral-800/80 dark:text-neutral-100"
-                              )}
-                            >
-                              <span className="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-neutral-500 dark:text-neutral-400">
-                                {t.role === "candidate" ? "Candidate" : "Interviewer"}
-                              </span>
-                              {t.text}
-                            </div>
-                          ))
-                        )}
-                      </div>
-                    </div>
-                  </div>
-
-                  <div className={card}>
-                    <h2 className="text-base font-semibold text-neutral-900 dark:text-neutral-100">Integrity timeline</h2>
-                    {proctoringEvents.filter((e) => e.severity !== "low").length > 0 ? (
-                      <ul className="mt-3 max-h-56 space-y-2 overflow-y-auto text-sm">
-                        {proctoringEvents
-                          .filter((e) => e.severity !== "low")
-                          .slice(-20)
-                          .reverse()
-                          .map((event, i) => (
-                            <li
-                              key={`${event.timestamp}-${i}`}
-                              className="flex gap-2 rounded-lg border border-neutral-100 bg-neutral-50 px-3 py-2 dark:border-neutral-800 dark:bg-neutral-800/40"
-                            >
-                              <span
-                                className={clsx(
-                                  "shrink-0 text-xs font-bold uppercase",
-                                  event.severity === "high"
-                                    ? "text-red-600 dark:text-red-400"
-                                    : "text-amber-600 dark:text-amber-400"
-                                )}
-                              >
-                                {event.severity}
-                              </span>
-                              <span className="text-neutral-700 dark:text-neutral-300">
-                                {event.type.replace(/_/g, " ")} — {event.details}
-                              </span>
-                            </li>
-                          ))}
-                      </ul>
-                    ) : (
-                      <p className="mt-3 text-sm text-neutral-600 dark:text-neutral-400">
-                        No elevated integrity flags in this window.
-                      </p>
-                    )}
                   </div>
                 </div>
               </>

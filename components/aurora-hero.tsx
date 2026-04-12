@@ -32,13 +32,13 @@ export function AuroraHero() {
       className="relative grid min-h-screen place-content-center overflow-hidden bg-gray-950 px-4 py-24 text-gray-200"
     >
       <div className="relative z-10 flex flex-col items-center">
-        <span className="mb-1.5 inline-block rounded-full bg-gray-600/50 px-3 py-1.5 text-sm">
-          TRUEFACE
-        </span>
-        <h1 className="max-w-4xl bg-linear-to-br from-white to-gray-400 bg-clip-text text-center text-3xl font-medium leading-tight text-transparent sm:text-5xl sm:leading-tight md:text-7xl md:leading-tight">
-          Interview the Real You.
+        <h1 className="max-w-4xl bg-linear-to-br from-white to-gray-400 bg-clip-text text-center text-3xl font-medium leading-none text-transparent sm:text-5xl md:text-7xl">
+          TrueFace
         </h1>
-        <p className="my-6 max-w-2xl text-center text-base leading-relaxed text-gray-300 md:text-lg md:leading-relaxed">
+        <p className="mt-0.5 max-w-4xl text-center text-base font-normal leading-tight text-gray-300 sm:mt-1 sm:text-lg md:text-xl">
+          Interview the Real You.
+        </p>
+        <p className="mt-4 mb-6 max-w-2xl text-center text-base leading-relaxed text-gray-300 md:mt-5 md:text-lg md:leading-relaxed">
           AI-powered mock interviews and fraud detection that measure skill, reveal authenticity, and make hiring truly
           trustworthy.
         </p>

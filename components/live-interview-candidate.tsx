@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useRef, useCallback, Suspense } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { LiveAvatarSession, SessionEvent } from "@heygen/liveavatar-web-sdk";
+import { AgentEventsEnum, LiveAvatarSession, SessionEvent } from "@heygen/liveavatar-web-sdk";
 import type { LiveavatarInterviewerGender } from "@/lib/liveavatar-interviewers";
 import { buildInterviewKnowledge } from "@/lib/interview-context";
 import { LIVE_INTERVIEW_QUESTION_FOCUS } from "@/lib/live-interview-focus";
@@ -13,16 +13,39 @@ interface Props {
   sessionId: string;
 }
 
+/** Hands-free: pause this long after last speech before sending (ms). */
+const SILENCE_BEFORE_SEND_MS = 2000;
+/** After avatar audio ends, wait for room/speaker echo to decay before listening again (ms). */
+const POST_AVATAR_LISTEN_COOLDOWN_MS = 1300;
+/** Brief pause before avatar speaks so your last words and network turn settle (ms). */
+const DELAY_BEFORE_AVATAR_REPEAT_MS = 700;
+/** If HeyGen never sends speak_ended, resume STT after this much time from repeat() (bounded by utterance length). */
+const STT_FALLBACK_MIN_MS = 5200;
+const STT_FALLBACK_MAX_MS = 26000;
+
+function estimateAvatarUtteranceMs(text: string): number {
+  const t = text.trim();
+  if (!t) return STT_FALLBACK_MIN_MS;
+  const words = t.split(/\s+/).filter(Boolean).length;
+  const ms = 2800 + words * 520;
+  return Math.min(STT_FALLBACK_MAX_MS, Math.max(STT_FALLBACK_MIN_MS, ms));
+}
+
 function VerifiedBadge({ active }: { active: boolean }) {
   return (
     <span
       className={`inline-flex shrink-0 items-center gap-1.5 rounded-full px-3 py-1 text-xs font-medium ring-1 ring-inset ${
         active
-          ? "bg-sky-500/10 text-sky-300 ring-sky-500/25"
+          ? "bg-white/10 text-white ring-white/25"
           : "bg-neutral-800/90 text-neutral-500 ring-white/10"
       }`}
     >
-      <svg className="h-3.5 w-3.5 shrink-0 text-sky-400" viewBox="0 0 24 24" fill="none" aria-hidden>
+      <svg
+        className={`h-3.5 w-3.5 shrink-0 ${active ? "text-white" : "text-neutral-500"}`}
+        viewBox="0 0 24 24"
+        fill="none"
+        aria-hidden
+      >
         <path
           d="M12 3l7 4v5c0 5-3 9-7 11-4-2-7-6-7-11V7l7-4z"
           stroke="currentColor"
@@ -75,6 +98,11 @@ function LiveInterviewCandidateInner({ sessionId }: Props) {
   const prevCameraOffRef = useRef(false);
   const prevMicMutedRef = useRef(false);
   const leavingRef = useRef(false);
+  const micMutedRef = useRef(false);
+  const sttPausedForTypingRef = useRef(false);
+  const sttSuppressedForAvatarRef = useRef(false);
+  const resumeSttAfterAvatarTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const sttResumeFallbackTimerRef = useRef<number | null>(null);
 
   const [avatarStreamReady, setAvatarStreamReady] = useState(false);
   const [avatarStarting, setAvatarStarting] = useState(false);
@@ -89,12 +117,16 @@ function LiveInterviewCandidateInner({ sessionId }: Props) {
   const [dialogueReady, setDialogueReady] = useState(false);
   const [sttReady, setSttReady] = useState(false);
   const [leaving, setLeaving] = useState(false);
+  const [liveSttPreview, setLiveSttPreview] = useState("");
+  const [showTypedFallback, setShowTypedFallback] = useState(false);
+  const [sttBlockedReason, setSttBlockedReason] = useState<"avatar" | "none">("none");
 
   messagesRef.current = messages;
   dialogueReadyRef.current = dialogueReady;
   isChattingRef.current = isChatting;
   sttReadyRef.current = sttReady;
   leavingRef.current = leaving;
+  micMutedRef.current = micMuted;
 
   const mlCall = useCallback(async (endpoint: string, options: RequestInit = {}) => {
     try {
@@ -244,23 +276,32 @@ function LiveInterviewCandidateInner({ sessionId }: Props) {
         if (item?.transcript) full += item.transcript;
       }
       pendingTranscriptRef.current = full;
-      setInput(full);
+      setLiveSttPreview(full);
       if (silenceTimerRef.current) {
         clearTimeout(silenceTimerRef.current);
         silenceTimerRef.current = null;
       }
-      if (!micActiveIntentRef.current || isChattingRef.current || !dialogueReadyRef.current) return;
+      if (
+        !micActiveIntentRef.current ||
+        isChattingRef.current ||
+        !dialogueReadyRef.current ||
+        micMutedRef.current ||
+        sttPausedForTypingRef.current ||
+        sttSuppressedForAvatarRef.current
+      )
+        return;
       silenceTimerRef.current = setTimeout(() => {
         silenceTimerRef.current = null;
         const t = pendingTranscriptRef.current.trim();
         if (t.length < 2) return;
         void submitUserAnswerRef.current(t);
-      }, 1150);
+      }, SILENCE_BEFORE_SEND_MS);
     };
     recognition.onerror = (event) => {
       if (event.error === "not-allowed" || event.error === "service-not-allowed") {
         micActiveIntentRef.current = false;
         setIsListening(false);
+        setSttBlockedReason("none");
       }
     };
     recognition.onend = () => {
@@ -282,6 +323,15 @@ function LiveInterviewCandidateInner({ sessionId }: Props) {
     setSttReady(true);
     return () => {
       micActiveIntentRef.current = false;
+      sttSuppressedForAvatarRef.current = false;
+      if (resumeSttAfterAvatarTimerRef.current) {
+        clearTimeout(resumeSttAfterAvatarTimerRef.current);
+        resumeSttAfterAvatarTimerRef.current = null;
+      }
+      if (sttResumeFallbackTimerRef.current) {
+        clearTimeout(sttResumeFallbackTimerRef.current);
+        sttResumeFallbackTimerRef.current = null;
+      }
       if (silenceTimerRef.current) {
         clearTimeout(silenceTimerRef.current);
         silenceTimerRef.current = null;
@@ -296,8 +346,61 @@ function LiveInterviewCandidateInner({ sessionId }: Props) {
     };
   }, []);
 
+  const tryResumeCandidateListening = useCallback(() => {
+    if (
+      leavingRef.current ||
+      !dialogueReadyRef.current ||
+      !sttReadyRef.current ||
+      micMutedRef.current ||
+      sttPausedForTypingRef.current ||
+      isChattingRef.current
+    )
+      return;
+    const r = recognitionRef.current;
+    if (!r) return;
+    sttSuppressedForAvatarRef.current = false;
+    setSttBlockedReason("none");
+    if (micActiveIntentRef.current) return;
+    window.setTimeout(() => {
+      if (
+        leavingRef.current ||
+        !dialogueReadyRef.current ||
+        !sttReadyRef.current ||
+        micMutedRef.current ||
+        sttPausedForTypingRef.current ||
+        isChattingRef.current
+      )
+        return;
+      const rec = recognitionRef.current;
+      if (!rec || micActiveIntentRef.current) return;
+      micActiveIntentRef.current = true;
+      try {
+        rec.start();
+        setIsListening(true);
+      } catch {
+        micActiveIntentRef.current = false;
+        setIsListening(false);
+      }
+    }, 160);
+  }, []);
+
+  const scheduleSttResumeFallback = useCallback((delayMs: number) => {
+    if (sttResumeFallbackTimerRef.current) {
+      clearTimeout(sttResumeFallbackTimerRef.current);
+      sttResumeFallbackTimerRef.current = null;
+    }
+    sttResumeFallbackTimerRef.current = window.setTimeout(() => {
+      sttResumeFallbackTimerRef.current = null;
+      tryResumeCandidateListening();
+    }, delayMs);
+  }, [tryResumeCandidateListening]);
+
   const stopSpeechRecognitionUserIntent = useCallback(() => {
     micActiveIntentRef.current = false;
+    if (sttResumeFallbackTimerRef.current) {
+      clearTimeout(sttResumeFallbackTimerRef.current);
+      sttResumeFallbackTimerRef.current = null;
+    }
     if (silenceTimerRef.current) {
       clearTimeout(silenceTimerRef.current);
       silenceTimerRef.current = null;
@@ -311,10 +414,19 @@ function LiveInterviewCandidateInner({ sessionId }: Props) {
       }
     }
     setIsListening(false);
+    setLiveSttPreview("");
   }, []);
+
+  const resumeListeningAfterTyping = useCallback(() => {
+    sttPausedForTypingRef.current = false;
+    if (sttSuppressedForAvatarRef.current) return;
+    tryResumeCandidateListening();
+  }, [tryResumeCandidateListening]);
 
   useEffect(() => {
     let cancelled = false;
+    let onAvatarSpeakStart: (() => void) | undefined;
+    let onAvatarSpeakEnd: (() => void) | undefined;
 
     async function startAvatar() {
       setAvatarStarting(true);
@@ -389,6 +501,55 @@ function LiveInterviewCandidateInner({ sessionId }: Props) {
 
         avatarRef.current = avatar;
 
+        const suppressSttForAvatarOutput = () => {
+          sttSuppressedForAvatarRef.current = true;
+          if (resumeSttAfterAvatarTimerRef.current) {
+            clearTimeout(resumeSttAfterAvatarTimerRef.current);
+            resumeSttAfterAvatarTimerRef.current = null;
+          }
+          if (sttResumeFallbackTimerRef.current) {
+            clearTimeout(sttResumeFallbackTimerRef.current);
+            sttResumeFallbackTimerRef.current = null;
+          }
+          if (silenceTimerRef.current) {
+            clearTimeout(silenceTimerRef.current);
+            silenceTimerRef.current = null;
+          }
+          pendingTranscriptRef.current = "";
+          if (!cancelled) {
+            setLiveSttPreview("");
+            setSttBlockedReason("avatar");
+          }
+          micActiveIntentRef.current = false;
+          try {
+            recognitionRef.current?.stop();
+          } catch {
+            /* ignore */
+          }
+          if (!cancelled) setIsListening(false);
+        };
+
+        const scheduleListenAfterAvatarFinishes = () => {
+          if (resumeSttAfterAvatarTimerRef.current) {
+            clearTimeout(resumeSttAfterAvatarTimerRef.current);
+          }
+          resumeSttAfterAvatarTimerRef.current = setTimeout(() => {
+            resumeSttAfterAvatarTimerRef.current = null;
+            if (cancelled) return;
+            tryResumeCandidateListening();
+          }, POST_AVATAR_LISTEN_COOLDOWN_MS);
+        };
+
+        onAvatarSpeakStart = () => {
+          suppressSttForAvatarOutput();
+        };
+        onAvatarSpeakEnd = () => {
+          scheduleListenAfterAvatarFinishes();
+        };
+
+        avatar.on(AgentEventsEnum.AVATAR_SPEAK_STARTED, onAvatarSpeakStart);
+        avatar.on(AgentEventsEnum.AVATAR_SPEAK_ENDED, onAvatarSpeakEnd);
+
         avatar.on(SessionEvent.SESSION_STREAM_READY, () => {
           if (cancelled) return;
           const video = document.getElementById("candidate-liveavatar-video") as HTMLVideoElement | null;
@@ -431,14 +592,23 @@ function LiveInterviewCandidateInner({ sessionId }: Props) {
               const opening = data.response.trim();
               setMessages(opening ? [{ role: "ai", text: opening }] : []);
               setInterviewerSubtitle(opening);
+              suppressSttForAvatarOutput();
               setDialogueReady(true);
               if (opening) {
                 try {
+                  await new Promise((r) => window.setTimeout(r, DELAY_BEFORE_AVATAR_REPEAT_MS));
+                  if (cancelled) return;
                   await avatarRef.current?.repeat(opening);
+                  scheduleSttResumeFallback(estimateAvatarUtteranceMs(opening));
                 } catch (e) {
                   console.error("Avatar repeat:", e);
+                  sttSuppressedForAvatarRef.current = false;
+                  scheduleListenAfterAvatarFinishes();
                 }
                 void syncConversationToMl([{ role: "ai", text: opening }]);
+              } else {
+                sttSuppressedForAvatarRef.current = false;
+                scheduleListenAfterAvatarFinishes();
               }
             } finally {
               if (!cancelled) setBrainStarting(false);
@@ -462,10 +632,27 @@ function LiveInterviewCandidateInner({ sessionId }: Props) {
 
     return () => {
       cancelled = true;
+      if (resumeSttAfterAvatarTimerRef.current) {
+        clearTimeout(resumeSttAfterAvatarTimerRef.current);
+        resumeSttAfterAvatarTimerRef.current = null;
+      }
+      if (sttResumeFallbackTimerRef.current) {
+        clearTimeout(sttResumeFallbackTimerRef.current);
+        sttResumeFallbackTimerRef.current = null;
+      }
+      sttSuppressedForAvatarRef.current = false;
       const a = avatarRef.current;
       avatarRef.current = null;
       brainSessionIdRef.current = null;
-      if (a) void a.stop().catch(() => {});
+      if (a) {
+        try {
+          if (onAvatarSpeakStart) a.off(AgentEventsEnum.AVATAR_SPEAK_STARTED, onAvatarSpeakStart);
+          if (onAvatarSpeakEnd) a.off(AgentEventsEnum.AVATAR_SPEAK_ENDED, onAvatarSpeakEnd);
+        } catch {
+          /* ignore */
+        }
+        void a.stop().catch(() => {});
+      }
       setAvatarStreamReady(false);
     };
   }, [
@@ -475,6 +662,8 @@ function LiveInterviewCandidateInner({ sessionId }: Props) {
     recordingId,
     liveBumpToken,
     syncConversationToMl,
+    tryResumeCandidateListening,
+    scheduleSttResumeFallback,
   ]);
 
   const submitUserAnswer = useCallback(
@@ -488,6 +677,7 @@ function LiveInterviewCandidateInner({ sessionId }: Props) {
       stopSpeechRecognitionUserIntent();
       pendingTranscriptRef.current = "";
       setInput("");
+      setLiveSttPreview("");
 
       const sid = brainSessionIdRef.current;
       if (!sid || !dialogueReady) {
@@ -500,6 +690,7 @@ function LiveInterviewCandidateInner({ sessionId }: Props) {
       const nextMessages = [...snapshot, { role: "user", text: trimmed }];
       setMessages(nextMessages);
       setIsChatting(true);
+      let resumeMicWithoutAvatar = false;
       try {
         const turnRes = await fetch("/api/live-interview/brain/turn", {
           method: "POST",
@@ -517,6 +708,7 @@ function LiveInterviewCandidateInner({ sessionId }: Props) {
           setMessages(snapshot);
           setInput(trimmed);
           setBrainError(turnData.error || "No response from interviewer.");
+          resumeMicWithoutAvatar = true;
           return;
         }
         const aiText = turnData.response;
@@ -525,30 +717,27 @@ function LiveInterviewCandidateInner({ sessionId }: Props) {
         setInterviewerSubtitle(aiText);
         if (aiText.trim()) {
           try {
+            await new Promise((r) => window.setTimeout(r, DELAY_BEFORE_AVATAR_REPEAT_MS));
             await avatarRef.current?.repeat(aiText);
+            scheduleSttResumeFallback(estimateAvatarUtteranceMs(aiText));
           } catch (e) {
             console.error("Avatar repeat:", e);
+            sttSuppressedForAvatarRef.current = false;
+            resumeMicWithoutAvatar = true;
           }
           void syncConversationToMl(withAi);
+        } else {
+          resumeMicWithoutAvatar = true;
         }
       } catch {
         setMessages(snapshot);
         setInput(trimmed);
+        resumeMicWithoutAvatar = true;
       } finally {
         setIsChatting(false);
-        window.setTimeout(() => {
-          if (!dialogueReadyRef.current || !sttReadyRef.current || leavingRef.current) return;
-          const r = recognitionRef.current;
-          if (!r) return;
-          micActiveIntentRef.current = true;
-          try {
-            r.start();
-            setIsListening(true);
-          } catch {
-            micActiveIntentRef.current = false;
-            setIsListening(false);
-          }
-        }, 500);
+      }
+      if (resumeMicWithoutAvatar) {
+        window.setTimeout(() => tryResumeCandidateListening(), 700);
       }
     },
     [
@@ -559,6 +748,8 @@ function LiveInterviewCandidateInner({ sessionId }: Props) {
       sessionId,
       stopSpeechRecognitionUserIntent,
       syncConversationToMl,
+      tryResumeCandidateListening,
+      scheduleSttResumeFallback,
     ]
   );
 
@@ -569,17 +760,15 @@ function LiveInterviewCandidateInner({ sessionId }: Props) {
   const sendTypedMessage = useCallback(() => void submitUserAnswer(input), [input, submitUserAnswer]);
 
   useEffect(() => {
-    if (!dialogueReady || !sttReady || leaving) return;
-    const r = recognitionRef.current;
-    if (!r || micActiveIntentRef.current) return;
-    micActiveIntentRef.current = true;
-    try {
-      r.start();
-      setIsListening(true);
-    } catch {
-      micActiveIntentRef.current = false;
-    }
-  }, [dialogueReady, sttReady, leaving]);
+    if (!dialogueReady || !sttReady || leaving || micMuted || sttPausedForTypingRef.current) return;
+    if (sttSuppressedForAvatarRef.current) return;
+    tryResumeCandidateListening();
+  }, [dialogueReady, sttReady, leaving, micMuted, tryResumeCandidateListening]);
+
+  useEffect(() => {
+    if (!micMuted) return;
+    stopSpeechRecognitionUserIntent();
+  }, [micMuted, stopSpeechRecognitionUserIntent]);
 
   useEffect(() => {
     if (!dialogueReady || !avatarStreamReady) {
@@ -621,6 +810,7 @@ function LiveInterviewCandidateInner({ sessionId }: Props) {
 
   const leaveMeeting = useCallback(async () => {
     stopSpeechRecognitionUserIntent();
+    setSttBlockedReason("none");
     setLeaving(true);
     if (frameIntervalRef.current) clearInterval(frameIntervalRef.current);
     frameIntervalRef.current = null;
@@ -650,8 +840,7 @@ function LiveInterviewCandidateInner({ sessionId }: Props) {
       <div className="flex min-h-[calc(100dvh-1px)] flex-col px-4 py-4 sm:px-5 sm:py-5 lg:px-6 lg:py-6">
         <div className="mb-3 flex shrink-0 items-center justify-between gap-3 lg:mb-4">
           <div>
-            <h1 className="text-xl font-semibold tracking-tight text-neutral-100 sm:text-2xl">TrueFace Interview</h1>
-            <p className="mt-0.5 text-xs text-neutral-500 sm:text-sm">Session verified for authenticity</p>
+            <h1 className="text-xl font-semibold tracking-tight text-neutral-100 sm:text-2xl">Live Interview</h1>
           </div>
           <VerifiedBadge active={mlConnected} />
         </div>
@@ -744,10 +933,16 @@ function LiveInterviewCandidateInner({ sessionId }: Props) {
             </div>
           </div>
 
-          {/* Voice-first answers (pause ~1s sends); optional typing */}
+          {/* Voice-first: speak and pause to send; typing is optional fallback */}
           <div className="shrink-0 border-t border-neutral-800 bg-neutral-950 px-3 py-3 sm:px-4">
             {brainError ? (
               <p className="mb-2 text-center text-xs text-amber-400/95">{brainError}</p>
+            ) : null}
+            {localStream && !localStream.getAudioTracks().length && dialogueReady && sttReady ? (
+              <p className="mb-2 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-center text-xs text-amber-200/95">
+                No microphone on this camera session — voice captions may not work. Allow the mic when prompted, or
+                refresh and grant camera + microphone.
+              </p>
             ) : null}
             <div className="mb-2 rounded-lg border border-neutral-800 bg-black/40 px-3 py-2">
               <div className="flex flex-wrap items-center justify-between gap-2">
@@ -756,11 +951,17 @@ function LiveInterviewCandidateInner({ sessionId }: Props) {
                   <span
                     className={`text-[10px] font-medium ${isListening ? "text-sky-400" : "text-neutral-600"}`}
                   >
-                    {isListening ? "● Listening — pause briefly to send" : "Starting microphone…"}
+                    {micMuted
+                      ? "Unmute to answer by voice"
+                      : isListening
+                        ? "● Speak your answer — pause ~2 seconds to send"
+                        : sttBlockedReason === "avatar"
+                          ? "○ Mic for captions resumes after Karen finishes speaking…"
+                          : "Starting microphone…"}
                   </span>
                 ) : dialogueReady ? (
                   <span className="text-[10px] font-medium text-amber-500/90">
-                    Speech not supported here — use typing below.
+                    Speech not supported in this browser — open typing below.
                   </span>
                 ) : null}
               </div>
@@ -770,38 +971,118 @@ function LiveInterviewCandidateInner({ sessionId }: Props) {
                   : interviewerSubtitle || "When you are connected, your interviewer will speak first."}
               </p>
             </div>
-            <div className="flex flex-col gap-2 sm:flex-row sm:items-end">
-              <label className="sr-only" htmlFor="live-interview-answer">
-                Your answer (optional typing)
-              </label>
-              <textarea
-                id="live-interview-answer"
-                rows={2}
-                value={input}
-                onChange={(e) => setInput(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter" && !e.shiftKey) {
-                    e.preventDefault();
-                    if (!isChatting && dialogueReady) void sendTypedMessage();
-                  }
-                }}
-                disabled={isChatting || !dialogueReady}
-                placeholder={
-                  dialogueReady
-                    ? "Optional: type instead of speaking — Enter to send, Shift+Enter for newline"
-                    : "Wait for the interviewer to finish connecting…"
-                }
-                className="min-h-[44px] w-full resize-none rounded-lg border border-neutral-700 bg-neutral-900 px-3 py-2 text-sm text-neutral-100 placeholder:text-neutral-600 focus:border-sky-600/50 focus:outline-none focus:ring-1 focus:ring-sky-500/30 disabled:opacity-50"
-              />
-              <button
-                type="button"
-                onClick={() => void sendTypedMessage()}
-                disabled={isChatting || !dialogueReady || !input.trim()}
-                className="shrink-0 rounded-full border border-neutral-600 bg-neutral-800 px-5 py-2 text-xs font-semibold text-neutral-200 transition-colors hover:bg-neutral-700 disabled:cursor-not-allowed disabled:opacity-40 sm:mb-0.5"
-              >
-                {isChatting ? "Sending…" : "Send typed"}
-              </button>
-            </div>
+
+            {dialogueReady && sttReady && liveSttPreview.trim() ? (
+              <p className="mb-2 rounded-lg border border-sky-500/20 bg-sky-500/5 px-3 py-2 text-sm text-sky-100/95">
+                <span className="text-[10px] font-semibold uppercase tracking-wide text-sky-400/90">You (voice)</span>
+                <span className="mt-1 block text-neutral-100">{liveSttPreview}</span>
+              </p>
+            ) : null}
+
+            {!showTypedFallback ? (
+              <div className="flex flex-col items-center gap-2 sm:flex-row sm:justify-between">
+                <p className="text-center text-xs text-neutral-500 sm:text-left">
+                  No typing needed — after Karen finishes speaking, answer normally. Pause about two seconds when
+                  you&apos;re done so we only capture you (headphones help). The mic mutes while she talks so her
+                  voice isn&apos;t transcribed as yours.
+                </p>
+                <button
+                  type="button"
+                  onClick={() => setShowTypedFallback(true)}
+                  className="shrink-0 text-xs font-medium text-sky-400 underline-offset-2 hover:text-sky-300 hover:underline"
+                >
+                  Type answer instead
+                </button>
+              </div>
+            ) : (
+              <div className="flex flex-col gap-2 sm:flex-row sm:items-end">
+                <div className="min-w-0 flex-1">
+                  <div className="mb-1 flex items-center justify-between gap-2">
+                    <label className="text-[10px] font-semibold uppercase tracking-wide text-neutral-500" htmlFor="live-interview-answer">
+                      Typed answer
+                    </label>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        sttPausedForTypingRef.current = false;
+                        setShowTypedFallback(false);
+                        setInput("");
+                        queueMicrotask(() => resumeListeningAfterTyping());
+                      }}
+                      className="text-[10px] font-medium text-neutral-500 hover:text-neutral-300"
+                    >
+                      Use voice only
+                    </button>
+                  </div>
+                  <textarea
+                    id="live-interview-answer"
+                    rows={2}
+                    value={input}
+                    onChange={(e) => setInput(e.target.value)}
+                    onFocus={() => {
+                      sttPausedForTypingRef.current = true;
+                      stopSpeechRecognitionUserIntent();
+                    }}
+                    onBlur={() => {
+                      resumeListeningAfterTyping();
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" && !e.shiftKey) {
+                        e.preventDefault();
+                        if (!isChatting && dialogueReady) void sendTypedMessage();
+                      }
+                    }}
+                    disabled={isChatting || !dialogueReady}
+                    placeholder={
+                      dialogueReady
+                        ? "Enter to send, Shift+Enter for newline"
+                        : "Wait for the interviewer to finish connecting…"
+                    }
+                    className="min-h-[44px] w-full resize-none rounded-lg border border-neutral-700 bg-neutral-900 px-3 py-2 text-sm text-neutral-100 placeholder:text-neutral-600 focus:border-sky-600/50 focus:outline-none focus:ring-1 focus:ring-sky-500/30 disabled:opacity-50"
+                  />
+                </div>
+                <button
+                  type="button"
+                  onClick={() => void sendTypedMessage()}
+                  disabled={isChatting || !dialogueReady || !input.trim()}
+                  className="shrink-0 rounded-full border border-neutral-600 bg-neutral-800 px-5 py-2 text-xs font-semibold text-neutral-200 transition-colors hover:bg-neutral-700 disabled:cursor-not-allowed disabled:opacity-40 sm:mb-0.5"
+                >
+                  {isChatting ? "Sending…" : "Send"}
+                </button>
+              </div>
+            )}
+
+            {dialogueReady && !sttReady ? (
+              <div className="mt-2 flex flex-col gap-2 sm:flex-row sm:items-end">
+                <label className="sr-only" htmlFor="live-interview-answer-fallback">
+                  Your answer
+                </label>
+                <textarea
+                  id="live-interview-answer-fallback"
+                  rows={2}
+                  value={input}
+                  onChange={(e) => setInput(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" && !e.shiftKey) {
+                      e.preventDefault();
+                      if (!isChatting && dialogueReady) void sendTypedMessage();
+                    }
+                  }}
+                  disabled={isChatting || !dialogueReady}
+                  placeholder="Type your answer — Enter to send, Shift+Enter for newline"
+                  className="min-h-[44px] w-full flex-1 resize-none rounded-lg border border-neutral-700 bg-neutral-900 px-3 py-2 text-sm text-neutral-100 placeholder:text-neutral-600 focus:border-sky-600/50 focus:outline-none focus:ring-1 focus:ring-sky-500/30 disabled:opacity-50"
+                />
+                <button
+                  type="button"
+                  onClick={() => void sendTypedMessage()}
+                  disabled={isChatting || !dialogueReady || !input.trim()}
+                  className="shrink-0 rounded-full border border-neutral-600 bg-neutral-800 px-5 py-2 text-xs font-semibold text-neutral-200 transition-colors hover:bg-neutral-700 disabled:cursor-not-allowed disabled:opacity-40 sm:mb-0.5"
+                >
+                  {isChatting ? "Sending…" : "Send"}
+                </button>
+              </div>
+            ) : null}
+
             {isChatting ? (
               <p className="mt-2 text-center text-[10px] text-neutral-500">Interviewer is responding…</p>
             ) : null}

@@ -144,6 +144,31 @@ export async function getRecordingForLiveCandidate(
   return doc as RecordingDoc;
 }
 
+/** Append live hiring transcript lines (host monitor reads via by-live-session). Does not change messageCount. */
+export async function appendLiveHiringTranscriptByToken(
+  recordingId: string,
+  liveBumpToken: string,
+  turns: RecordingChatMessage[]
+): Promise<boolean> {
+  if (!turns.length) return true;
+  let oid: ObjectId;
+  try {
+    oid = new ObjectId(recordingId);
+  } catch {
+    return false;
+  }
+  if (!liveBumpToken || typeof liveBumpToken !== "string") return false;
+  const db = await getDb();
+  const r = await recordingsCollection(db).updateOne(
+    { _id: oid, liveBumpToken },
+    {
+      $push: { messages: { $each: turns } },
+      $set: { updatedAt: new Date() },
+    } as import("mongodb").UpdateFilter<RecordingWrite>
+  );
+  return r.modifiedCount > 0;
+}
+
 export async function bumpRecordingMessageCountByLiveToken(
   recordingId: string,
   liveBumpToken: string,

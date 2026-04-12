@@ -22,6 +22,7 @@ export async function GET(req: Request) {
   if (!rec) {
     return NextResponse.json({ recording: null });
   }
+  const msgs = rec.messages ?? [];
   return NextResponse.json({
     recording: {
       id: rec._id.toString(),
@@ -32,6 +33,7 @@ export async function GET(req: Request) {
       candidateDisplayName: rec.candidateDisplayName ?? null,
       roleTitle: rec.roleTitle ?? null,
       updatedAt: rec.updatedAt.toISOString(),
+      messages: msgs,
     },
   });
 }
