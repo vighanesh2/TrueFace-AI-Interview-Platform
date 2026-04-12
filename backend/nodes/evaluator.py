@@ -21,6 +21,13 @@ def evaluate_answer(state: InterviewState) -> dict:
         return {"last_answer_quality": "shallow"}
 
     phase = (state.get("phase") or "").lower()
+    code_hint = ""
+    if "[Code submission]" in last_user:
+        code_hint = (
+            " This turn includes a code submission; weight code correctness, structure, and complexity "
+            "more than the optional verbal note."
+        )
+
     if phase == "behavioral":
         rubric = (
             "Classify the candidate's last answer in a behavioral interview. "
@@ -35,7 +42,7 @@ def evaluate_answer(state: InterviewState) -> dict:
             "Reply with exactly one word: shallow | adequate | strong. "
             "shallow = vague, very short, or off-topic. "
             "adequate = reasonable but thin. strong = specific, structured, technical depth."
-        )
+        ) + code_hint
 
     llm = get_chat()
     raw = llm.invoke(

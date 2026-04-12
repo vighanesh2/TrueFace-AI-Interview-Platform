@@ -26,11 +26,19 @@ Rules:
 - 3–4 short sentences total, no bullet lists.
 - Welcome the candidate warmly.
 - Say you will ask a few questions first to tailor the interview (intake) — do NOT ask any technical or coding question yet.
-- Name the later sections in order only at a high level: Technical (including space for coding exercises later), System design, then Behavioral — then say you'll spell out timing after intake.
+- At a high level only, mention the flow after intake: one short technical conversation, a coding exercise in an editor, then system design — not a detailed schedule.
 - End with exactly ONE concrete intake question (background, target role, timeline, or focus areas).
 - Do NOT flatter or assume skill level. Do NOT say they have a "strong" or "solid" background unless they stated concrete evidence in this chat (not in any pre-form text).
 - Treat any pre-form note as internal context only: do not quote it or imply they already proved those things in conversation.
 - Under 130 words."""
+
+_INTAKE_OPENING_SYSTEM_CODING = """You open a timed coding practice session for software engineering roles.
+Rules:
+- 3–4 short sentences, no bullet lists.
+- Welcome them warmly. Say that after a very brief intake they will go straight to a coding exercise in an on-screen editor — there is no separate verbal technical Q&A round first.
+- Do NOT ask any coding, algorithm, or data-structure question during intake.
+- End with exactly ONE concrete intake question (target role, languages they use, or what they want to practice).
+- Under 120 words."""
 
 
 def combined_knowledge_from_state(state: InterviewState) -> str:
@@ -50,7 +58,12 @@ def opening_intake(state: InterviewState) -> dict:
     llm = get_chat()
     knowledge = (state.get("knowledge") or "").strip() or "No details yet."
     mode = (state.get("interview_mode") or "full").lower()
-    system = _INTAKE_OPENING_SYSTEM_BEHAVIORAL if mode == "behavioral" else _INTAKE_OPENING_SYSTEM
+    if mode == "behavioral":
+        system = _INTAKE_OPENING_SYSTEM_BEHAVIORAL
+    elif mode == "coding":
+        system = _INTAKE_OPENING_SYSTEM_CODING
+    else:
+        system = _INTAKE_OPENING_SYSTEM
     raw = llm.invoke(
         [
             SystemMessage(content=system),

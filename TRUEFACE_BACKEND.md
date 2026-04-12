@@ -18,6 +18,23 @@ This document captures what we agreed on: **FastAPI + LangGraph + dense-vector R
 - **Build the `backend/` first**, test with curl/Postman. Then **pull** teammate frontend changes when wiring URLs.
 - New Python code lives under `backend/` so it rarely conflicts with Next.js work.
 
+### Git branches (`bharaths27/HackDartmouthXI`)
+
+| Branch | Role |
+|--------|------|
+| **`main`** | Default branch on GitHub. Your local `main` may be **ahead/behind** `origin/main` if others land commits there; reconcile with `git fetch` and merge or rebase when you need to align. |
+| **`RAG-Pipeline`** | Integration branch for the full stack (Next.js dashboard/auth/Mongo paths + FastAPI RAG backend + home interview UI). Treat it as the **shared integration line** when the team is assembling pieces. |
+
+**What “resolving divergence” meant (spring 2026):** `main` and `RAG-Pipeline` had **different commit histories** after the same ancestor (dashboard/auth work on one side; FastAPI + LITE LiveAvatar + home `app/page.tsx` on the other). We **merged `origin/RAG-Pipeline` into local `main`**, resolved conflicts, and **pushed the result to `origin/RAG-Pipeline`** (`git push origin main:RAG-Pipeline`). That **did not** update `origin/main`—only the **`RAG-Pipeline`** ref on GitHub.
+
+**Going forward (recommended):**
+
+1. For small fixes: branch off **`RAG-Pipeline`** (or `main`, per team convention), push your branch, open a **PR** into `RAG-Pipeline` (or `main`).
+2. Avoid **`git push --force`** to shared branches unless everyone agrees.
+3. Never commit **`.env.local`**, service account JSON, or anything already in **`.gitignore`**.
+
+**Session persistence (Mongo / recordings, etc.):** Owned by your teammate’s slice—no action required here beyond keeping the **HTTP API contract** stable (`/session/start`, `/session/{id}/turn`, `/session/{id}/state`).
+
 ## Stack
 
 - **API:** FastAPI + uvicorn
@@ -118,6 +135,24 @@ Install current versions when you bootstrap; pin in `requirements.txt` for the t
 - `langchain`, `langgraph`, `langchain-google-vertexai` (Vertex path)
 - `pinecone` (v6 client per current Pinecone SDK naming)
 
+## Code editor (Cursor / VS Code) and agents
+
+- Open the **repo root** (`HackDartmouthXI/`) so both `backend/` and the Next.js app resolve correctly.
+- **Two terminals:** `npm run dev` (frontend) and `uvicorn` for FastAPI (see [Running locally](#running-locally-from-repo-root)).
+- **Cursor:** optional rules live under `.cursor/rules/`; `AGENTS.md` at the repo root flags Next.js version quirks for automated assistants—skim it before large UI/API edits.
+- **Secrets:** keep using **`.env.local`** at the repo root for Next.js; point Python at the same file or a `backend/.env` mirror—**one convention for the team** avoids “works on my machine” drift.
+
+## Future work (short list)
+
+- **Product / UX:** Today **`/`** runs the **mock interview + LITE avatar + FastAPI brain**; **`RAG-Pipeline`** also adds **dashboard, login/register, and `/dashboard/interview`**. Decide whether the “primary” interview entry should stay on `/`, live only under the dashboard, or deep-link between them—then trim duplicate flows if needed.
+- **In-app code editor (if you add one):** Reuse the same **`session_id`** and existing turn API where possible; treat any **IDE surface** as another client of `/session/...` (session persistence stays with your teammate’s Mongo work).
+- **Docs:** Consider a committed **`.env.example`** (no real keys) listing `NEXT_PUBLIC_INTERVIEW_API_URL`, GCP, Pinecone, HeyGen, and Mongo vars the dashboard expects.
+- **`origin/main`:** When the team is ready, merge **`RAG-Pipeline` → `main`** on GitHub (PR), or rebase your integration branch onto latest `main` first if `main` has moved.
+
+## Next.js routes (coding mock)
+
+The **LangGraph + LiveAvatar + Monaco** flow (direct calls to this FastAPI) lives at **`/code-interview`**. The site root **`/`** is the marketing landing. Point `NEXT_PUBLIC_INTERVIEW_API_URL` at the uvicorn URL if it is not the default `http://127.0.0.1:8000`.
+
 ## Security
 
 - Service account JSON and `.env.local` must stay **gitignored**
@@ -139,4 +174,4 @@ backend/.venv/bin/python -m backend.rag.loader
 
 ---
 
-*Last updated from team discussion — treat this as the living checklist for the Python orchestration slice.*
+*Last updated from team discussion — treat this as the living checklist for the Python orchestration slice. Git / branch notes and editor guidance were added when integrating `RAG-Pipeline`.*
