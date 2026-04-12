@@ -33,6 +33,16 @@ yarn-error.log*
 # env files (can opt-in for committing if needed)
 .env*
 
+# service account keys
+*.json.key
+newface-493021-*.json
+
+# Python backend — cloned RAG corpora (loader)
+/backend/data/
+/backend/.venv/
+**/__pycache__/
+*.py[cod]
+
 # vercel
 .vercel
 
