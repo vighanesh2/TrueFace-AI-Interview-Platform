@@ -5,9 +5,11 @@ import { usePathname } from "next/navigation";
 import clsx from "clsx";
 import { SignOutButton } from "@/components/sign-out-button";
 import { ThemeMenu } from "@/components/theme-menu";
+import type { UserRole } from "@/lib/auth";
 
 type Props = {
   userEmail: string;
+  userRole: UserRole;
   /** For aria-controls from the expand control when collapsed */
   id?: string;
   onCollapse?: () => void;
@@ -98,7 +100,11 @@ function IconPanelClose({ className }: { className?: string }) {
   );
 }
 
-export function DashboardSidebar({ userEmail, id, onCollapse }: Props) {
+function roleLabel(role: UserRole) {
+  return role === "interviewer" ? "Interviewer" : "Candidate";
+}
+
+export function DashboardSidebar({ userEmail, userRole, id, onCollapse }: Props) {
   const pathname = usePathname();
   const initial = (userEmail[0] ?? "?").toUpperCase();
 
@@ -119,7 +125,7 @@ export function DashboardSidebar({ userEmail, id, onCollapse }: Props) {
             <p className="truncate text-sm font-semibold text-neutral-900 dark:text-neutral-100">
               {displayName(userEmail)}
             </p>
-            <p className="truncate text-xs text-neutral-500 dark:text-neutral-400">Candidate</p>
+            <p className="truncate text-xs text-neutral-500 dark:text-neutral-400">{roleLabel(userRole)}</p>
           </div>
         </div>
         {onCollapse ? (

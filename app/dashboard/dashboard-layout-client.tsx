@@ -2,6 +2,7 @@
 
 import { useCallback, useSyncExternalStore } from "react";
 import clsx from "clsx";
+import type { UserRole } from "@/lib/auth";
 import { DashboardSidebar } from "./dashboard-sidebar";
 
 const STORAGE_KEY = "trueface-dashboard-sidebar-collapsed";
@@ -48,6 +49,7 @@ function persistCollapsed(next: boolean) {
 
 type Props = {
   userEmail: string;
+  userRole: UserRole;
   children: React.ReactNode;
 };
 
@@ -65,7 +67,7 @@ function IconChevronRight({ className }: { className?: string }) {
   );
 }
 
-export function DashboardLayoutClient({ userEmail, children }: Props) {
+export function DashboardLayoutClient({ userEmail, userRole, children }: Props) {
   const collapsed = useSyncExternalStore(
     subscribeCollapsed,
     getCollapsedSnapshot,
@@ -87,6 +89,7 @@ export function DashboardLayoutClient({ userEmail, children }: Props) {
         <DashboardSidebar
           id="dashboard-nav"
           userEmail={userEmail}
+          userRole={userRole}
           onCollapse={toggleCollapsed}
         />
       </div>

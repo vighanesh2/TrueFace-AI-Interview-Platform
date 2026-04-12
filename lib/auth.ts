@@ -7,11 +7,16 @@ const SESSION_COOKIE = "session";
 const SESSION_DAYS = 7;
 const BCRYPT_ROUNDS = 12;
 
-export type SessionUser = { id: string; email: string };
+/** Account type chosen at signup; used for role-based UX and future access control. */
+export type UserRole = "candidate" | "interviewer";
+
+export type SessionUser = { id: string; email: string; role: UserRole };
 
 type UserFields = {
   email: string;
   passwordHash: string;
+  /** Set on new signups; omitted on legacy accounts (treated as candidate). */
+  role?: UserRole;
   createdAt: Date;
 };
 
@@ -48,11 +53,20 @@ export async function verifyPassword(plain: string, hash: string): Promise<boole
   return bcrypt.compare(plain, hash);
 }
 
-export async function createUser(email: string, passwordHash: string): Promise<ObjectId> {
+export function normalizeUserRole(value: unknown): UserRole {
+  return value === "interviewer" ? "interviewer" : "candidate";
+}
+
+export async function createUser(
+  email: string,
+  passwordHash: string,
+  role: UserRole
+): Promise<ObjectId> {
   const db = await getDb();
   const result = await usersCollection(db).insertOne({
     email: email.toLowerCase().trim(),
     passwordHash,
+    role,
     createdAt: new Date(),
   });
   return result.insertedId;
@@ -93,7 +107,11 @@ export async function getSessionUser(): Promise<SessionUser | null> {
   const user = await usersCollection(db).findOne({ _id: session.userId });
   if (!user?._id) return null;
 
-  return { id: user._id.toString(), email: user.email };
+  return {
+    id: user._id.toString(),
+    email: user.email,
+    role: normalizeUserRole((user as { role?: unknown }).role),
+  };
 }
 
 export function sessionCookieOptions() {

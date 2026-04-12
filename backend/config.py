@@ -29,6 +29,13 @@ PINECONE_API_KEY = os.environ.get("PINECONE_API_KEY", "")
 PINECONE_INDEX_NAME = os.environ.get("PINECONE_INDEX_NAME", "")
 PINECONE_HOST = os.environ.get("PINECONE_HOST", "")
 
+# When true (default), weak coding-problem titles trigger one repair LLM call (see generator).
+CODING_TITLE_STRICT = os.environ.get("CODING_TITLE_STRICT", "true").lower() in (
+    "1",
+    "true",
+    "yes",
+)
+
 DATA_DIR = Path(__file__).resolve().parent / "data"
 INTERVIEW_MENTOR_DIR = DATA_DIR / "The-Interview-Mentor"
 BEHAVIORAL_DIR = DATA_DIR / "behavioral-interview-list-of-questions"

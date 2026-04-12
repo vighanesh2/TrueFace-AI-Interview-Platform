@@ -4,6 +4,7 @@ import {
   createSession,
   ensureAuthIndexes,
   findUserByEmail,
+  normalizeUserRole,
   sessionCookieOptions,
   SESSION_COOKIE,
   verifyPassword,
@@ -39,5 +40,6 @@ export async function POST(req: Request) {
   const cookieStore = await cookies();
   cookieStore.set(SESSION_COOKIE, token, sessionCookieOptions());
 
-  return NextResponse.json({ ok: true, email: user.email });
+  const role = normalizeUserRole((user as { role?: unknown }).role);
+  return NextResponse.json({ ok: true, email: user.email, role });
 }

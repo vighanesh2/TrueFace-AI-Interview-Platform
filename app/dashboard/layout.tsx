@@ -8,5 +8,9 @@ export default async function DashboardLayout({ children }: { children: React.Re
     redirect("/login");
   }
 
-  return <DashboardLayoutClient userEmail={user.email}>{children}</DashboardLayoutClient>;
+  return (
+    <DashboardLayoutClient userEmail={user.email} userRole={user.role}>
+      {children}
+    </DashboardLayoutClient>
+  );
 }

@@ -5,6 +5,13 @@ export type InterviewType = "technical" | "behavioral";
 
 export type RecordingStatus = "in_progress" | "completed";
 
+/** Text chat sessions vs saved Live Avatar mock interviews */
+export type RecordingSource = "text_chat" | "live_avatar";
+
+export type RecordingChatMessage = { role: string; text: string };
+
+export type RecordingClip = { videoUrl: string; question: string; createdAt: Date };
+
 export type RecordingWrite = {
   userId: ObjectId;
   type: InterviewType;
@@ -13,6 +20,14 @@ export type RecordingWrite = {
   messageCount: number;
   createdAt: Date;
   updatedAt: Date;
+  /** Present on new rows; omitted on legacy docs. */
+  source?: RecordingSource;
+  /** Public Vercel Blob URL for a saved mock-interview video, when recorded */
+  meetingVideoUrl?: string;
+  /** Full transcript when saved from Live Avatar (or copied from text chat later). */
+  messages?: RecordingChatMessage[];
+  /** Optional per-question video clips (extended schema). */
+  clips?: RecordingClip[];
 };
 
 export type RecordingDoc = RecordingWrite & { _id: ObjectId };
@@ -31,10 +46,15 @@ export function recordingTitle(type: InterviewType, createdAt: Date): string {
   return `${label} · ${createdAt.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" })}`;
 }
 
-export async function createRecording(userId: ObjectId, type: InterviewType): Promise<ObjectId> {
+export async function createRecording(
+  userId: ObjectId,
+  type: InterviewType,
+  options?: { source?: RecordingSource }
+): Promise<ObjectId> {
   const db = await getDb();
   const now = new Date();
   const title = recordingTitle(type, now);
+  const source: RecordingSource = options?.source ?? "text_chat";
   const result = await recordingsCollection(db).insertOne({
     userId,
     type,
@@ -43,6 +63,7 @@ export async function createRecording(userId: ObjectId, type: InterviewType): Pr
     messageCount: 0,
     createdAt: now,
     updatedAt: now,
+    source,
   });
   return result.insertedId;
 }
@@ -97,6 +118,53 @@ export async function setRecordingCompleted(recordingId: string, userId: ObjectI
   );
 }
 
+export async function setRecordingMeetingVideo(
+  recordingId: string,
+  userId: ObjectId,
+  meetingVideoUrl: string
+): Promise<boolean> {
+  let oid: ObjectId;
+  try {
+    oid = new ObjectId(recordingId);
+  } catch {
+    return false;
+  }
+  const db = await getDb();
+  const r = await recordingsCollection(db).updateOne(
+    { _id: oid, userId },
+    { $set: { meetingVideoUrl, updatedAt: new Date() } }
+  );
+  return r.matchedCount > 0;
+}
+
+export async function saveLiveAvatarTranscript(
+  recordingId: string,
+  userId: ObjectId,
+  messages: RecordingChatMessage[]
+): Promise<boolean> {
+  let oid: ObjectId;
+  try {
+    oid = new ObjectId(recordingId);
+  } catch {
+    return false;
+  }
+  const db = await getDb();
+  const now = new Date();
+  const count = messages.length;
+  const res = await recordingsCollection(db).updateOne(
+    { _id: oid, userId },
+    {
+      $set: {
+        messages,
+        messageCount: count,
+        status: "completed" as RecordingStatus,
+        updatedAt: now,
+      },
+    }
+  );
+  return res.matchedCount > 0;
+}
+
 export async function addVideoClipToRecording(
   recordingId: string,
   userId: ObjectId,
@@ -109,17 +177,13 @@ export async function addVideoClipToRecording(
   } catch {
     return;
   }
-  
   const db = await getDb();
-  
-  // We use db.collection directly here to bypass strict TypeScript checking 
-  // since we are adding a brand new "clips" array to the database!
   await db.collection("recordings").updateOne(
     { _id: oid, userId },
-    { 
-      $push: { clips: { videoUrl, question, createdAt: new Date() } } as any, 
-      $set: { updatedAt: new Date() } 
-    }
+    {
+      $push: { clips: { videoUrl, question, createdAt: new Date() } },
+      $set: { updatedAt: new Date() },
+    } as unknown as import("mongodb").UpdateFilter<import("mongodb").Document>
   );
 }
 
@@ -135,10 +199,23 @@ export async function removeVideoClipFromRecording(
     return;
   }
   const db = await getDb();
-  
-  // $pull tells MongoDB to find the clip with this exact URL and yank it out of the array
   await db.collection("recordings").updateOne(
     { _id: oid, userId },
-    { $pull: { clips: { videoUrl } } as any }
+    {
+      $pull: { clips: { videoUrl } },
+      $set: { updatedAt: new Date() },
+    } as unknown as import("mongodb").UpdateFilter<import("mongodb").Document>
   );
+}
+
+export async function deleteRecording(recordingId: string, userId: ObjectId): Promise<boolean> {
+  let oid: ObjectId;
+  try {
+    oid = new ObjectId(recordingId);
+  } catch {
+    return false;
+  }
+  const db = await getDb();
+  const res = await recordingsCollection(db).deleteOne({ _id: oid, userId });
+  return res.deletedCount > 0;
 }

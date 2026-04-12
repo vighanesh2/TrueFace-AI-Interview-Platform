@@ -19,6 +19,7 @@ export default function RegisterPage() {
   const router = useRouter();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [role, setRole] = useState<"candidate" | "interviewer">("candidate");
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
@@ -30,7 +31,7 @@ export default function RegisterPage() {
       const res = await fetch("/api/auth/register", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email, password }),
+        body: JSON.stringify({ email, password, role }),
       });
       const data = await res.json();
       if (!res.ok) {
@@ -87,6 +88,24 @@ export default function RegisterPage() {
                 minLength={8}
                 className={lightInput}
               />
+            </Field>
+
+            <Field>
+              <Label className={lightLabel}>I am signing up as</Label>
+              <Description className={lightDescription}>
+                Candidates practice interviews; interviewers use hiring workflows (coming soon).
+              </Description>
+              <select
+                name="role"
+                value={role}
+                onChange={(e) => setRole(e.target.value as "candidate" | "interviewer")}
+                required
+                className={clsx(lightInput, "cursor-pointer")}
+                aria-label="Account role"
+              >
+                <option value="candidate">Candidate</option>
+                <option value="interviewer">Interviewer</option>
+              </select>
             </Field>
 
             <Field>
