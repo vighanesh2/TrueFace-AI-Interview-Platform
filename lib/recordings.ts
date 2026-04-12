@@ -96,3 +96,49 @@ export async function setRecordingCompleted(recordingId: string, userId: ObjectI
     { $set: { status: "completed" as RecordingStatus, updatedAt: new Date() } }
   );
 }
+
+export async function addVideoClipToRecording(
+  recordingId: string,
+  userId: ObjectId,
+  videoUrl: string,
+  question: string
+) {
+  let oid: ObjectId;
+  try {
+    oid = new ObjectId(recordingId);
+  } catch {
+    return;
+  }
+  
+  const db = await getDb();
+  
+  // We use db.collection directly here to bypass strict TypeScript checking 
+  // since we are adding a brand new "clips" array to the database!
+  await db.collection("recordings").updateOne(
+    { _id: oid, userId },
+    { 
+      $push: { clips: { videoUrl, question, createdAt: new Date() } } as any, 
+      $set: { updatedAt: new Date() } 
+    }
+  );
+}
+
+export async function removeVideoClipFromRecording(
+  recordingId: string,
+  userId: ObjectId,
+  videoUrl: string
+) {
+  let oid: ObjectId;
+  try {
+    oid = new ObjectId(recordingId);
+  } catch {
+    return;
+  }
+  const db = await getDb();
+  
+  // $pull tells MongoDB to find the clip with this exact URL and yank it out of the array
+  await db.collection("recordings").updateOne(
+    { _id: oid, userId },
+    { $pull: { clips: { videoUrl } } as any }
+  );
+}
