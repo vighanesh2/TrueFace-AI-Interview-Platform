@@ -6,7 +6,12 @@ import clsx from "clsx";
 import { SignOutButton } from "@/components/sign-out-button";
 import { ThemeMenu } from "@/components/theme-menu";
 
-type Props = { userEmail: string };
+type Props = {
+  userEmail: string;
+  /** For aria-controls from the expand control when collapsed */
+  id?: string;
+  onCollapse?: () => void;
+};
 
 function IconHome({ className }: { className?: string }) {
   return (
@@ -79,23 +84,57 @@ function displayName(email: string) {
   return local.replace(/[._-]/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
-export function DashboardSidebar({ userEmail }: Props) {
+function IconPanelClose({ className }: { className?: string }) {
+  return (
+    <svg className={className} width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden>
+      <path
+        d="M15 18l-6-6 6-6"
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
+export function DashboardSidebar({ userEmail, id, onCollapse }: Props) {
   const pathname = usePathname();
   const initial = (userEmail[0] ?? "?").toUpperCase();
 
   return (
-    <aside className="flex h-screen w-64 shrink-0 flex-col border-r border-neutral-200/90 bg-[#f5f5f5] px-4 py-8 font-sans dark:border-neutral-800 dark:bg-neutral-950">
-      <div className="flex items-center gap-3 px-2">
-        <div
-          className="flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-neutral-300 text-base font-semibold text-neutral-700 dark:bg-neutral-700 dark:text-neutral-100"
-          aria-hidden
-        >
-          {initial}
+    <aside
+      id={id}
+      className="flex h-screen w-64 shrink-0 flex-col border-r border-neutral-200/90 bg-[#f5f5f5] px-4 py-8 font-sans dark:border-neutral-800 dark:bg-neutral-950"
+    >
+      <div className="flex items-start gap-2 px-2">
+        <div className="flex min-w-0 flex-1 items-center gap-3">
+          <div
+            className="flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-neutral-300 text-base font-semibold text-neutral-700 dark:bg-neutral-700 dark:text-neutral-100"
+            aria-hidden
+          >
+            {initial}
+          </div>
+          <div className="min-w-0">
+            <p className="truncate text-sm font-semibold text-neutral-900 dark:text-neutral-100">
+              {displayName(userEmail)}
+            </p>
+            <p className="truncate text-xs text-neutral-500 dark:text-neutral-400">Candidate</p>
+          </div>
         </div>
-        <div className="min-w-0">
-          <p className="truncate text-sm font-semibold text-neutral-900 dark:text-neutral-100">{displayName(userEmail)}</p>
-          <p className="truncate text-xs text-neutral-500 dark:text-neutral-400">Candidate</p>
-        </div>
+        {onCollapse ? (
+          <button
+            type="button"
+            onClick={onCollapse}
+            className="mt-1 shrink-0 rounded-lg p-2 text-neutral-500 transition-colors hover:bg-white/80 hover:text-neutral-900 dark:text-neutral-400 dark:hover:bg-neutral-800/80 dark:hover:text-neutral-100"
+            title="Close sidebar"
+            aria-expanded={true}
+            aria-controls={id}
+          >
+            <IconPanelClose />
+            <span className="sr-only">Close sidebar</span>
+          </button>
+        ) : null}
       </div>
 
       <nav className="mt-10 flex flex-col gap-1 px-1" aria-label="Main">

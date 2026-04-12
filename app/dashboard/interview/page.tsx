@@ -2,7 +2,7 @@ import { LiveAvatarInterview } from "@/components/live-avatar-interview";
 
 export default function DashboardLiveInterviewPage() {
   return (
-    <div className="mx-auto max-w-4xl px-8 py-10 sm:px-10 sm:py-12">
+    <div className="flex min-h-[calc(100dvh-1px)] flex-col px-4 py-5 sm:px-6 sm:py-6 lg:px-8 lg:py-8">
       <LiveAvatarInterview />
     </div>
   );

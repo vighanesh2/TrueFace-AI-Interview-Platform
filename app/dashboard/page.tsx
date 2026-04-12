@@ -1,9 +1,10 @@
+import Image from "next/image";
 import Link from "next/link";
 import { NewInterviewLauncher } from "./new-interview-launcher";
 
 export default function DashboardHomePage() {
   return (
-    <div className="mx-auto max-w-3xl px-8 py-12 sm:px-10 sm:py-16">
+    <div className="mx-auto max-w-4xl px-8 py-12 sm:px-10 sm:py-16">
       <p className="text-2xl" aria-hidden>
         👋
       </p>
@@ -34,6 +35,18 @@ export default function DashboardHomePage() {
           Pick up where you left off or start fresh—each session is tracked so you can build toward measurable readiness
           and trustworthy hiring signals.
         </p>
+      </div>
+
+      <div className="mt-10 overflow-hidden rounded-2xl border border-neutral-200 bg-neutral-50 shadow-md dark:border-neutral-700 dark:bg-neutral-900/40 dark:shadow-neutral-950/50">
+        <Image
+          src="/homepage.png"
+          alt="Live mock interview: AI interviewer, subtitles, and meeting controls"
+          width={1920}
+          height={1080}
+          className="h-auto w-full object-cover object-top"
+          sizes="(max-width: 896px) 100vw, 896px"
+          priority
+        />
       </div>
 
       <div className="mt-10 flex flex-wrap items-center gap-3">
