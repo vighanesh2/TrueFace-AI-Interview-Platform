@@ -72,7 +72,7 @@ function buildTranscriptSummary(turns: ChatTurn[]): string {
 function AuthenticitySparkline({ values }: { values: number[] }) {
   if (values.length < 2) return null;
   const w = 100;
-  const h = 36;
+  const h = 28;
   const pts = values
     .map((v, i) => {
       const x = (i / (values.length - 1)) * w;
@@ -228,6 +228,11 @@ export default function MonitorPage({ params }: { params: Promise<{ sessionId: s
     "dark:border-neutral-700 dark:bg-neutral-900/50 dark:shadow-neutral-950/40"
   );
 
+  const candidateCard = clsx(
+    "rounded-lg border border-neutral-200 bg-white p-3 shadow-sm",
+    "dark:border-neutral-700 dark:bg-neutral-900/50 dark:shadow-neutral-950/40"
+  );
+
   return (
     <div className="min-h-screen bg-white font-sans text-neutral-900 dark:bg-neutral-950 dark:text-neutral-100">
       <div className="mx-auto max-w-6xl px-5 py-8 sm:px-8 sm:py-10">
@@ -278,46 +283,54 @@ export default function MonitorPage({ params }: { params: Promise<{ sessionId: s
         <div className="grid gap-6 lg:grid-cols-12">
           {/* Sidebar: candidate + recording */}
           <aside className="space-y-6 lg:col-span-4">
-            <div className={card}>
-              <h2 className="text-sm font-semibold text-neutral-900 dark:text-neutral-100">Candidate</h2>
+            <div className={candidateCard}>
+              <h2 className="text-xs font-semibold uppercase tracking-wide text-neutral-500 dark:text-neutral-400">
+                Candidate
+              </h2>
               {recording === undefined ? (
-                <p className="mt-2 text-sm text-neutral-500 dark:text-neutral-400">Checking workspace…</p>
+                <p className="mt-1.5 text-xs text-neutral-500 dark:text-neutral-400">Checking workspace…</p>
               ) : recording ? (
-                <dl className="mt-3 space-y-2 text-sm">
-                  <div>
-                    <dt className="text-xs font-medium uppercase tracking-wide text-neutral-500 dark:text-neutral-400">
+                <dl className="mt-2 grid grid-cols-1 gap-2 text-xs sm:grid-cols-2 sm:gap-x-4 sm:gap-y-2 lg:grid-cols-4 lg:gap-x-3">
+                  <div className="min-w-0">
+                    <dt className="text-[10px] font-medium uppercase tracking-wide text-neutral-500 dark:text-neutral-500">
                       Name
                     </dt>
-                    <dd className="font-medium text-neutral-900 dark:text-neutral-100">
+                    <dd className="mt-0.5 font-medium leading-snug text-neutral-900 dark:text-neutral-100">
                       {recording.candidateDisplayName || "—"}
                     </dd>
                   </div>
-                  <div>
-                    <dt className="text-xs font-medium uppercase tracking-wide text-neutral-500 dark:text-neutral-400">
+                  <div className="min-w-0">
+                    <dt className="text-[10px] font-medium uppercase tracking-wide text-neutral-500 dark:text-neutral-500">
                       Role
                     </dt>
-                    <dd className="text-neutral-700 dark:text-neutral-300">{recording.roleTitle || "—"}</dd>
+                    <dd className="mt-0.5 leading-snug text-neutral-700 dark:text-neutral-300">
+                      {recording.roleTitle || "—"}
+                    </dd>
                   </div>
-                  <div>
-                    <dt className="text-xs font-medium uppercase tracking-wide text-neutral-500 dark:text-neutral-400">
+                  <div className="min-w-0">
+                    <dt className="text-[10px] font-medium uppercase tracking-wide text-neutral-500 dark:text-neutral-500">
                       Interview
                     </dt>
-                    <dd className="capitalize text-neutral-700 dark:text-neutral-300">{recording.type}</dd>
+                    <dd className="mt-0.5 capitalize leading-snug text-neutral-700 dark:text-neutral-300">
+                      {recording.type}
+                    </dd>
                   </div>
-                  <div>
-                    <dt className="text-xs font-medium uppercase tracking-wide text-neutral-500 dark:text-neutral-400">
+                  <div className="min-w-0">
+                    <dt className="text-[10px] font-medium uppercase tracking-wide text-neutral-500 dark:text-neutral-500">
                       Recording
                     </dt>
-                    <dd>
-                      <span className="text-neutral-700 dark:text-neutral-300">{recording.title}</span>
-                      <p className="mt-1 text-xs text-neutral-500 dark:text-neutral-400">
+                    <dd className="mt-0.5">
+                      <span className="line-clamp-2 leading-snug text-neutral-700 dark:text-neutral-300">
+                        {recording.title}
+                      </span>
+                      <p className="mt-0.5 text-[10px] leading-snug text-neutral-500 dark:text-neutral-500">
                         Logged messages: {recording.messageCount} · {recording.status.replace("_", " ")}
                       </p>
                     </dd>
                   </div>
                 </dl>
               ) : (
-                <p className="mt-2 text-sm text-neutral-600 dark:text-neutral-400">
+                <p className="mt-1.5 text-xs text-neutral-600 dark:text-neutral-400">
                   Sign in as the host who created this session to see candidate details and recording linkage here.
                 </p>
               )}
@@ -361,32 +374,32 @@ export default function MonitorPage({ params }: { params: Promise<{ sessionId: s
               <>
                 <div
                   className={clsx(
-                    "rounded-lg border border-neutral-200 bg-neutral-50/90 p-4 shadow-sm dark:border-neutral-700 dark:bg-neutral-900/40",
+                    "rounded-lg border border-neutral-200 bg-neutral-50/90 p-3 shadow-sm dark:border-neutral-700 dark:bg-neutral-900/40",
                     "border-l-[3px]",
                     getRiskAccent(report.risk_level)
                   )}
                 >
-                  <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between sm:gap-6">
-                    <div className="min-w-0 flex flex-wrap items-baseline gap-x-3 gap-y-1">
-                      <span className="text-[11px] font-semibold uppercase tracking-wider text-neutral-500 dark:text-neutral-400">
+                  <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between sm:gap-4">
+                    <div className="min-w-0 flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
+                      <span className="text-[10px] font-semibold uppercase tracking-wider text-neutral-500 dark:text-neutral-400">
                         Authenticity
                       </span>
-                      <span className="text-4xl font-bold tabular-nums tracking-tight text-neutral-900 dark:text-neutral-50 sm:text-5xl">
+                      <span className="text-2xl font-bold tabular-nums tracking-tight text-neutral-900 dark:text-neutral-50 sm:text-3xl">
                         {authenticityPct}%
                       </span>
-                      <span className={clsx("text-sm font-semibold", getRiskColor(report.risk_level))}>
+                      <span className={clsx("text-xs font-semibold", getRiskColor(report.risk_level))}>
                         {report.risk_level}
                       </span>
                     </div>
-                    <div className="flex min-w-0 flex-1 flex-col gap-3 sm:max-w-md lg:max-w-xs">
-                      <p className="text-xs leading-relaxed text-neutral-600 dark:text-neutral-400">
+                    <div className="flex min-w-0 flex-1 flex-col gap-2 sm:max-w-md lg:max-w-xs">
+                      <p className="text-[11px] leading-relaxed text-neutral-600 dark:text-neutral-400">
                         {report.recommendation}
                       </p>
                       <div>
-                        <p className="text-[10px] font-semibold uppercase tracking-wider text-neutral-500 dark:text-neutral-500">
+                        <p className="text-[9px] font-semibold uppercase tracking-wider text-neutral-500 dark:text-neutral-500">
                           Recent trend (%)
                         </p>
-                        <div className="mt-1 rounded-md border border-neutral-200 bg-white px-2 py-1.5 dark:border-neutral-600 dark:bg-neutral-950/50">
+                        <div className="mt-0.5 rounded border border-neutral-200 bg-white px-1.5 py-1 dark:border-neutral-600 dark:bg-neutral-950/50">
                           <AuthenticitySparkline values={authenticityTrail} />
                         </div>
                       </div>

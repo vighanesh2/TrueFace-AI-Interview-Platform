@@ -202,8 +202,10 @@ function LiveInterviewCandidateInner({ sessionId }: Props) {
             <p className="mt-0.5 text-sm text-neutral-500">This session is being verified by TrueFace</p>
           </div>
           <span
-            className={`shrink-0 rounded-full px-3 py-1 text-xs font-bold ${
-              mlConnected ? "bg-green-900/90 text-green-400" : "bg-neutral-800 text-neutral-500"
+            className={`shrink-0 rounded-full px-3 py-1 text-xs font-semibold ring-1 ring-inset ${
+              mlConnected
+                ? "bg-emerald-950/60 text-emerald-200/95 ring-emerald-400/25"
+                : "bg-neutral-800/90 text-neutral-500 ring-white/5"
             }`}
           >
             {mlConnected ? "🛡️ Verified Session" : "Connecting…"}
