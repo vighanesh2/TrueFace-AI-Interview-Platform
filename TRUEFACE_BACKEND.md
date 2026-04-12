@@ -149,6 +149,10 @@ Install current versions when you bootstrap; pin in `requirements.txt` for the t
 - **Docs:** Consider a committed **`.env.example`** (no real keys) listing `NEXT_PUBLIC_INTERVIEW_API_URL`, GCP, Pinecone, HeyGen, and Mongo vars the dashboard expects.
 - **`origin/main`:** When the team is ready, merge **`RAG-Pipeline` → `main`** on GitHub (PR), or rebase your integration branch onto latest `main` first if `main` has moved.
 
+## Next.js routes (coding mock)
+
+The **LangGraph + LiveAvatar + Monaco** flow (direct calls to this FastAPI) lives at **`/code-interview`**. The site root **`/`** is the marketing landing. Point `NEXT_PUBLIC_INTERVIEW_API_URL` at the uvicorn URL if it is not the default `http://127.0.0.1:8000`.
+
 ## Security
 
 - Service account JSON and `.env.local` must stay **gitignored**
